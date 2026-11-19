@@ -263,7 +263,11 @@ button {
   height: 100dvh;
   display: grid;
   grid-template-rows: auto auto auto 1fr;
-  padding: calc(env(safe-area-inset-top) + 8px) 16px calc(env(safe-area-inset-bottom) + 8px);
+  /* iOS 26 blurs content under the status bar about 28px below the safe area,
+     so clear that band when there is a top inset (adds 0 when there isn't).
+     At the bottom the inset already clears the home indicator. */
+  padding: calc(env(safe-area-inset-top) + min(env(safe-area-inset-top) / 2, 20px) + 8px) 16px
+    max(env(safe-area-inset-bottom), 12px);
   gap: 10px;
   overflow: hidden;
   user-select: none;
@@ -522,7 +526,6 @@ button {
   justify-content: flex-end;
   gap: 8px;
   min-height: 0;
-  padding-bottom: 2dvh;
 }
 .controls {
   position: relative;
