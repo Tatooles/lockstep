@@ -323,6 +323,10 @@ export class EventDiffer {
     }
 
     if (snap.mapId !== prev.mapId) ev.push({ type: 'map', from: prev.mapId, to: snap.mapId });
+    // Battle-end events go last: a catch is often first visible in the same sample
+    // the battle ends (the party is unreadable while the new Pokemon is named).
+    const endEvents: GameEvent[] = [];
+    const battleJustEnded = prev.inBattle !== 0 && snap.inBattle === 0;
 
     // Battle transitions. The battle flag is set before enemy data loads, and
     // wild starts are held until the intro transition has played.
@@ -356,10 +360,10 @@ export class EventDiffer {
           const now = snap.bag[id] ?? 0;
           if (!BALLS.has(id) && now < q) items.push({ id, count: q - now });
         }
-        if (items.length) ev.push({ type: 'items-used', kind, items });
+        if (items.length) endEvents.push({ type: 'items-used', kind, items });
         this.bagAtStart = null;
       }
-      ev.push({ type: 'battle-end', kind, enemy: prev.enemy, mapId: prev.mapId });
+      endEvents.push({ type: 'battle-end', kind, enemy: prev.enemy, mapId: prev.mapId });
       this.battleEndedAt = this.tick;
       this.activeKey = null;
     }
@@ -398,7 +402,8 @@ export class EventDiffer {
       const p = prevByKey.get(m.key);
       if (!p) continue;
       if (p.hp > 0 && m.hp === 0) {
-        ev.push({ type: 'fainted', mon: m, mapId: snap.mapId, enemy: snap.inBattle ? snap.enemy : null, inBattle: snap.inBattle !== 0 });
+        const enemy = snap.inBattle ? snap.enemy : battleJustEnded ? prev.enemy : null;
+        ev.push({ type: 'fainted', mon: m, mapId: snap.mapId, enemy, inBattle: snap.inBattle !== 0 || battleJustEnded });
       } else if (p.hp === 0 && m.hp > 0) {
         ev.push({ type: 'revived', mon: m });
       }
@@ -411,6 +416,7 @@ export class EventDiffer {
     const gained = snap.badges & ~prev.badges;
     for (let i = 0; i < 8; i++) if (gained & (1 << i)) ev.push({ type: 'badge', index: i });
 
+    ev.push(...endEvents);
     return ev;
   }
 }

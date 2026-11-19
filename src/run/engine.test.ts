@@ -218,6 +218,25 @@ describe('nuzlocke engine', () => {
     expect(run.encounters.at(-1)).toMatchObject({ area: 'Route 1', species: RATTATA, outcome: 'pending' });
   });
 
+  it('counts a catch that shows up in the same sample the battle ends', () => {
+    const { game, run, notices, step } = harness();
+    step();
+    game.addParty(BULBASAUR, 5, 0xabcd, 'BULBASAUR');
+    step();
+    game.giveBalls();
+    game.mem[S.wCurMap] = ROUTE_22;
+    game.startWild(RATTATA, 2, 0x2468);
+    step();
+    step();
+    // Naming the new Pokemon hides the party; it reappears after the battle has ended.
+    game.addParty(RATTATA, 2, 0x2468, 'RATTATA');
+    game.endBattle();
+    step();
+    expect(run.encounters.at(-1)).toMatchObject({ area: 'Route 22', species: RATTATA, outcome: 'caught' });
+    expect(notices.some((n) => n.title.includes('got away'))).toBe(false);
+    expect(run.timeline.some((t) => t.kind === 'miss')).toBe(false);
+  });
+
   it('defers wild battle start until enemy data is loaded', () => {
     const { game, run, step } = harness();
     step();
