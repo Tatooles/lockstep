@@ -86,6 +86,7 @@ export class Session {
 
   private toasts: ToastItem[] = [];
   private toastId = 0;
+  private shownOnce = new Set<string>();
   private view: SessionView;
   private listeners = new Set<() => void>();
   private publishAt = 0;
@@ -446,8 +447,17 @@ export class Session {
   }
 
   private toast(n: Notice): void {
+    // While the bot plays, the grind chip says what's going on; info notices
+    // (no balls yet, dupes, ghosts) would only pile up at turbo speed.
+    if (this.grinder && n.tone === 'info') return;
+    if (n.once) {
+      if (this.shownOnce.has(n.title)) return;
+      this.shownOnce.add(n.title);
+    }
     const now = performance.now();
-    this.toasts = [...this.toasts, { ...n, id: ++this.toastId, at: now }].slice(-4);
+    // A repeat of a toast still on screen replaces it rather than stacking.
+    const rest = this.toasts.filter((t) => t.title !== n.title || t.body !== n.body);
+    this.toasts = [...rest, { ...n, id: ++this.toastId, at: now }].slice(-3);
     if ((n.tone === 'bad' || n.tone === 'good') && 'vibrate' in navigator) navigator.vibrate?.(n.tone === 'bad' ? [40, 60, 40] : 20);
   }
 

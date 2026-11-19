@@ -125,7 +125,7 @@ export function applyEvent(run: Run, ev: GameEvent, ctx: EngineContext): Notice[
       }
       if (!run.hadBalls && hasPokeBalls(snap.bag)) run.hadBalls = true;
       if (run.rules.waitForBalls && !run.hadBalls) {
-        notices.push({ tone: 'info', title: 'No Poké Balls yet', body: "Doesn't count. Encounters start once you have Poké Balls." });
+        notices.push({ tone: 'info', title: 'No Poké Balls yet', body: "Doesn't count. Encounters start once you have Poké Balls.", once: true });
         break;
       }
       const area = areaOf(ev.mapId, run.rules);

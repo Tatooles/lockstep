@@ -112,4 +112,6 @@ export interface Notice {
   title: string;
   body?: string;
   species?: number;
+  /** Show at most once per session (for reminders that other UI already covers). */
+  once?: boolean;
 }
