@@ -3,7 +3,7 @@
 A Game Boy emulator for your phone that keeps your Pokémon Nuzlocke honest. It reads the game's memory while you
 play, so the bookkeeping happens on its own.
 
-**Try it:** https://lockstep-beryl.vercel.app. It runs entirely in your browser; on a phone, add it to your home
+**Try it:** https://lockstep.tatooles.dev. It runs entirely in your browser; on a phone, add it to your home
 screen to play full screen and offline.
 
 ## What it tracks
