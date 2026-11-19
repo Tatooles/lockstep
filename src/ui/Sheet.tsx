@@ -768,6 +768,18 @@ function RunTab({ session, view, onStartRun, onExit }: { session: Session; view:
         </>
       )}
 
+      {session.data && (
+        <>
+          <h3>Game helpers</h3>
+          <Toggle
+            label="Endless Repel"
+            hint="Works like a Repel that never wears off: wild Pokémon weaker than your lead stay away, stronger ones still appear."
+            checked={p.repel}
+            onChange={(v) => setPref({ repel: v })}
+          />
+        </>
+      )}
+
       <h3>Save states</h3>
       {statesOk ? (
         <div className="slots">

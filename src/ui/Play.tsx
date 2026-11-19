@@ -25,6 +25,10 @@ export function Play({ session, onExit }: { session: Session; onExit: () => void
     session.setPalette(p.palette);
   }, [session, p.palette]);
 
+  useEffect(() => {
+    session.setRepel(p.repel);
+  }, [session, p.repel]);
+
   // iOS only lets audio start inside certain gestures; try on each until it sticks.
   useEffect(() => {
     const unlock = () => {

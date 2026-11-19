@@ -12,6 +12,7 @@
 //   until EXPR N      run until a JS expression over `s` (snapshot) is true, max N frames
 //   stopif EXPR       when EXPR over `s` is true, skip ahead to the next `resume` line (or the end)
 //   resume            marks where skipping from `stopif` ends
+//   repel on|off      endless Repel, like the app setting
 //   poke ADDR VAL     write a byte (test setup only, e.g. text speed); numbers may be 0x-prefixed
 // Buttons: a b start select up down left right
 
@@ -49,6 +50,7 @@ const version = detectVersion(rom);
 if (!version) throw new Error('not a supported Gen 1 ROM');
 const data = new Gen1Data(rom, version);
 const reader = new Gen1Reader(SYMBOLS[version]);
+const REPEL_ADDR = SYMBOLS[version].wRepelRemainingSteps;
 const differ = new EventDiffer();
 const run = newRun({ name: 'Harness', romKey: 'harness', version });
 const milestones = readMilestones(data);
@@ -65,6 +67,7 @@ function reviveState(o: unknown): unknown {
 if (stateIn) gb.loadState(reviveState(JSON.parse(readFileSync(stateIn, 'utf8'))) as SaveState);
 
 let frame = 0;
+let repel = false;
 let last: Snapshot | null = null;
 function step(n = 1): void {
   for (let i = 0; i < n; i++) {
@@ -73,6 +76,7 @@ function step(n = 1): void {
     if (frame % 4 === 0) {
       const s = reader.read(ram);
       if (!s.valid) continue;
+      if (repel) gb.bus.write(REPEL_ADDR, 0xff);
       last = s;
       for (const ev of differ.update(s)) {
         const notices = applyEvent(run, ev, { data, snap: s });
@@ -175,6 +179,11 @@ for (const raw of script.split(/[\n;]/)) {
       if (moved < n(a2, 1)) console.log(`[f${frame}] move ${a1}: blocked after ${moved}`);
       break;
     }
+    case 'repel':
+      // Same as the app's Endless Repel setting.
+      repel = a1 === 'on';
+      if (!repel) gb.bus.write(REPEL_ADDR, 0);
+      break;
     case 'poke':
       // Test setup only (e.g. text speed); the tracker never writes memory.
       gb.bus.write(Number(a1), Number(a2));

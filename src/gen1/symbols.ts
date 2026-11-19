@@ -58,6 +58,7 @@ export interface Gen1Symbols {
   wStatusFlags6: number;
   wEventFlags: number;
   wLastMap: number;
+  wRepelRemainingSteps: number;
   MonsterNames: number; // flat ROM offset (-1 if absent)
   PokedexOrder: number; // flat ROM offset (-1 if absent)
   BaseStats: number; // flat ROM offset (-1 if absent)
@@ -146,6 +147,7 @@ export const SYMBOLS: Record<"red" | "blue" | "yellow", Gen1Symbols> = {
     wStatusFlags6: 0xd732,
     wEventFlags: 0xd747,
     wLastMap: 0xd365,
+    wRepelRemainingSteps: 0xd0db,
     MonsterNames: 0x1c21e,
     PokedexOrder: 0x41024,
     BaseStats: 0x383de,
@@ -232,6 +234,7 @@ export const SYMBOLS: Record<"red" | "blue" | "yellow", Gen1Symbols> = {
     wStatusFlags6: 0xd732,
     wEventFlags: 0xd747,
     wLastMap: 0xd365,
+    wRepelRemainingSteps: 0xd0db,
     MonsterNames: 0x1c21e,
     PokedexOrder: 0x41024,
     BaseStats: 0x383de,
@@ -318,6 +321,7 @@ export const SYMBOLS: Record<"red" | "blue" | "yellow", Gen1Symbols> = {
     wStatusFlags6: 0xd731,
     wEventFlags: 0xd746,
     wLastMap: 0xd364,
+    wRepelRemainingSteps: 0xd0da,
     MonsterNames: 0xe8000,
     PokedexOrder: 0x410b1,
     BaseStats: 0x383de,

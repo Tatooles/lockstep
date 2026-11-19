@@ -5,9 +5,11 @@ export interface Prefs {
   theme: 'system' | 'light' | 'dark';
   pauseOnSheet: boolean;
   haptics: boolean;
+  /** Keep a Repel active in Gen 1 games (wild Pokémon below the lead's level stay away). */
+  repel: boolean;
 }
 
-const DEFAULTS: Prefs = { palette: 'dusk', theme: 'system', pauseOnSheet: true, haptics: true };
+const DEFAULTS: Prefs = { palette: 'dusk', theme: 'system', pauseOnSheet: true, haptics: true, repel: false };
 const KEY = 'lockstep:prefs';
 
 let current: Prefs = DEFAULTS;

@@ -60,6 +60,9 @@ export class Session {
   private paused = false;
   private hidden = false;
   private speed = 1;
+  /** Endless Repel: keep the game's repel step counter topped up. */
+  private repel = false;
+  private repelApplied = false;
   private muted = false;
   private fpsFrames = 0;
   private fpsAt = 0;
@@ -165,6 +168,10 @@ export class Session {
     this.present();
   }
 
+  setRepel(on: boolean): void {
+    this.repel = on;
+  }
+
   setPalette(id: string): void {
     this.palette = packPalette(paletteById(id));
     this.present();
@@ -255,6 +262,7 @@ export class Session {
     const snap = this.reader.read(this.ram);
     if (!snap.valid) return;
     this.snap = snap;
+    this.applyRepel();
     const events = this.differ.update(snap);
     if (this.run && this.data) {
       for (const ev of events) {
@@ -270,6 +278,23 @@ export class Session {
       if (events.length) this.scheduleRunSave();
     }
     if (events.length) this.publish();
+  }
+
+  /**
+   * The game skips wild Pokémon below the lead's level while its repel step
+   * counter is above zero, so holding it at 255 is a Repel that never wears off.
+   * Turning it off clears the counter only if this session set it.
+   */
+  private applyRepel(): void {
+    if (!this.data) return;
+    const a = SYMBOLS[this.data.version].wRepelRemainingSteps - 0xc000;
+    if (this.repel) {
+      this.gb.bus.wram[a] = 0xff;
+      this.repelApplied = true;
+    } else if (this.repelApplied) {
+      this.gb.bus.wram[a] = 0;
+      this.repelApplied = false;
+    }
   }
 
   private toast(n: Notice): void {

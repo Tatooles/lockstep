@@ -18,6 +18,7 @@ const WRAM = [
   'wGrassRate', 'wGrassMons', 'wWaterRate', 'wWaterMons', 'wPlayTimeHours', 'wPlayTimeMinutes',
   'wPlayTimeSeconds', 'wNumBagItems', 'wBagItems', 'wCapturedMonSpecies', 'wNumSafariBalls', 'wXCoord',
   'wYCoord', 'wLinkState', 'wOptions', 'wStatusFlags5', 'wStatusFlags6', 'wEventFlags', 'wLastMap',
+  'wRepelRemainingSteps',
 ];
 const ROM = [
   'MonsterNames', 'PokedexOrder', 'BaseStats', 'MewBaseStats', 'WildDataPointers', 'MoveNames', 'Moves',
