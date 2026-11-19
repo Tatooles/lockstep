@@ -1,16 +1,63 @@
 // Headless conformance runner: blargg + dmg-acid2 (screenshot compare) and
 // mooneye (Fibonacci register signature on LD B,B).
-//   node tools/run-test-roms.ts [filter]
+//   node tools/run-test-roms.ts [filter] [--wasm]
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
 import { PNG } from 'pngjs';
 import { GameBoy } from '../src/core/gameboy.ts';
 import { CLOCK_HZ, SCREEN_H, SCREEN_W } from '../src/core/constants.ts';
+import { WasmGameBoy } from '../wasm-core/gameboy-wasm.ts';
 
 const ROOT = join(import.meta.dirname, '..', 'test-roms');
 const OUT = join(import.meta.dirname, 'out');
-const filter = process.argv[2] ?? '';
+const useWasm = process.argv.includes('--wasm');
+const filter = process.argv.slice(2).find((a) => !a.startsWith('--')) ?? '';
+
+/** The slice of an emulator core this runner needs, so both cores can be tested. */
+interface Core {
+  frame: Uint8Array;
+  runFrame(): void;
+  step(): void;
+  peek(addr: number): number;
+  mcycles(): number;
+  halted(): boolean;
+  pc(): number;
+  regs(): number[];
+  onSerial(fn: (b: number) => void): void;
+}
+
+function makeCore(rom: Uint8Array): Core {
+  if (useWasm) {
+    const w = new WasmGameBoy(rom);
+    w.outputEnabled = false;
+    return {
+      frame: w.frame,
+      runFrame: () => w.runFrame(),
+      step: () => w.step(),
+      peek: (a) => w.peek(a),
+      mcycles: () => w.mcycles,
+      halted: () => w.reg(10) === 1,
+      pc: () => w.reg(9),
+      regs: () => [2, 3, 4, 5, 6, 7].map((i) => w.reg(i)),
+      onSerial: (fn) => (w.onSerial = fn),
+    };
+  }
+  const gb = new GameBoy(rom);
+  gb.apu.outputEnabled = false;
+  const c = gb.cpu;
+  return {
+    frame: gb.ppu.frame,
+    runFrame: () => gb.runFrame(),
+    step: () => c.step(),
+    peek: (a) => gb.peek(a),
+    mcycles: () => gb.bus.mcycles,
+    halted: () => c.halted,
+    pc: () => c.pc,
+    regs: () => [c.b, c.c, c.d, c.e, c.h, c.l],
+    onSerial: (fn) => (gb.bus.onSerialByte = fn),
+  };
+}
 const SHADES = [0xff, 0xaa, 0x55, 0x00];
 
 interface Result {
@@ -20,9 +67,9 @@ interface Result {
   ms: number;
 }
 
-function framePng(gb: GameBoy): PNG {
+function framePng(gb: Core): PNG {
   const png = new PNG({ width: SCREEN_W, height: SCREEN_H });
-  const f = gb.ppu.frame;
+  const f = gb.frame;
   for (let i = 0; i < f.length; i++) {
     const s = SHADES[f[i]];
     png.data[i * 4] = s;
@@ -33,8 +80,8 @@ function framePng(gb: GameBoy): PNG {
   return png;
 }
 
-function matches(gb: GameBoy, expected: PNG): number {
-  const f = gb.ppu.frame;
+function matches(gb: Core, expected: PNG): number {
+  const f = gb.frame;
   let diff = 0;
   for (let i = 0; i < f.length; i++) {
     if (SHADES[f[i]] !== expected.data[i * 4]) diff++;
@@ -42,7 +89,7 @@ function matches(gb: GameBoy, expected: PNG): number {
   return diff;
 }
 
-function saveFailure(name: string, gb: GameBoy): void {
+function saveFailure(name: string, gb: Core): void {
   mkdirSync(OUT, { recursive: true });
   writeFileSync(join(OUT, name.replace(/[\\/]/g, '__') + '.png'), PNG.sync.write(framePng(gb)));
 }
@@ -50,12 +97,11 @@ function saveFailure(name: string, gb: GameBoy): void {
 function screenshotTest(rom: string, png: string, seconds: number): Result {
   const name = relative(ROOT, rom);
   const t0 = performance.now();
-  const gb = new GameBoy(new Uint8Array(readFileSync(rom)));
+  const gb = makeCore(new Uint8Array(readFileSync(rom)));
   let serial = '';
-  gb.bus.onSerialByte = (b) => {
+  gb.onSerial((b) => {
     serial += String.fromCharCode(b);
-  };
-  gb.apu.outputEnabled = false;
+  });
   const expected = PNG.sync.read(readFileSync(png));
   const frames = Math.ceil(seconds * 59.7275);
   let diff = -1;
@@ -77,19 +123,17 @@ function screenshotTest(rom: string, png: string, seconds: number): Result {
 function mooneyeTest(rom: string): Result {
   const name = relative(ROOT, rom);
   const t0 = performance.now();
-  const gb = new GameBoy(new Uint8Array(readFileSync(rom)));
-  gb.apu.outputEnabled = false;
-  const cpu = gb.cpu;
-  const limit = gb.bus.mcycles + (CLOCK_HZ / 4) * 20;
+  const gb = makeCore(new Uint8Array(readFileSync(rom)));
+  const limit = gb.mcycles() + (CLOCK_HZ / 4) * 20;
   let done = false;
-  while (gb.bus.mcycles < limit) {
-    if (!cpu.halted && gb.peek(cpu.pc) === 0x40) {
+  while (gb.mcycles() < limit) {
+    if (!gb.halted() && gb.peek(gb.pc()) === 0x40) {
       done = true;
       break;
     }
-    cpu.step();
+    gb.step();
   }
-  const regs = [cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l];
+  const regs = gb.regs();
   const pass = done && regs.join() === '3,5,8,13,21,34';
   if (!pass) saveFailure(name, gb);
   return {
@@ -155,6 +199,6 @@ for (const d of mooneyeDirs) {
 const passed = results.filter((r) => r.pass).length;
 console.log(`\n${passed}/${results.length} passed`);
 writeFileSync(
-  join(import.meta.dirname, '..', 'test-results.json'),
+  join(import.meta.dirname, '..', useWasm ? 'test-results-wasm.json' : 'test-results.json'),
   JSON.stringify({ passed, total: results.length, results: results.map(({ name, pass, detail }) => ({ name, pass, detail })) }, null, 2),
 );
