@@ -113,7 +113,7 @@ run.timeline.push(
 
 const milestones = readMilestones(data);
 const view: SessionView = {
-  snap, run, paused: false, speed: 1, toasts: [], warnings: [], milestone: { ...milestones[0], name: 'Brock' }, fps: 60, muted: false, version: 'red', grind: null, grindEnd: null, rev: 1,
+  snap, run, paused: false, speed: 1, toasts: [], warnings: [], milestone: { ...milestones[0], name: 'Brock' }, fps: 60, muted: false, version: 'red', grind: null, grindEnd: null, core: 'wasm', emuMs: 0.21, rev: 1,
 };
 const session = {
   data, rom: { key: 'fixture', name: 'Fixture', title: 'POKEMON RED' }, updateRun: () => {}, canUseStates: () => true,

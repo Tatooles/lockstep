@@ -844,6 +844,30 @@ function RunTab({ session, view, onStartRun, onExit }: { session: Session; view:
       <Toggle label="Sound" checked={!view.muted} onChange={(v) => session.setMuted(!v)} />
       <Toggle label="Pause while this panel is open" checked={p.pauseOnSheet} onChange={(v) => setPref({ pauseOnSheet: v })} />
       <Toggle label="Vibrate on button press" hint="Android only; iPhone browsers don't allow it." checked={p.haptics} onChange={(v) => setPref({ haptics: v })} />
+      <div className="field">
+        <span>
+          <span className="lbl">Emulator core</span>
+          <div className="hint">
+            {view.core === 'wasm' ? 'Rust, compiled to WebAssembly' : 'TypeScript'}
+            {view.emuMs != null && ` · ${view.emuMs.toFixed(2)} ms per frame`}. Switching keeps your place.
+          </div>
+        </span>
+        <span className="seg">
+          {(['wasm', 'ts'] as const).map((k) => (
+            <button
+              key={k}
+              aria-pressed={view.core === k}
+              onClick={async () => {
+                setPref({ core: k });
+                const got = await session.switchCore(k);
+                if (got !== k) setMsg('WebAssembly is unavailable here, so the TypeScript core is still running.');
+              }}
+            >
+              {k === 'wasm' ? 'Rust' : 'TypeScript'}
+            </button>
+          ))}
+        </span>
+      </div>
 
       <h3>In-game save</h3>
       <p className="sub">Back up your .sav file, or bring one from another emulator or a cartridge dump.</p>

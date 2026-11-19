@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Session } from '../platform/session.ts';
 import { db, type RomRecord } from '../platform/storage.ts';
 import { Library } from './Library.tsx';
+import { prefs } from './prefs.ts';
 import { Play } from './Play.tsx';
 
 export function App() {
@@ -15,7 +16,7 @@ export function App() {
     try {
       const full = rom.data ? rom : await db.getRom(rom.key);
       if (!full) throw new Error('That game is no longer on this device.');
-      setSession(await Session.open(full));
+      setSession(await Session.open(full, prefs.get().core));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

@@ -9,7 +9,7 @@
 // stack (see screen.ts) and presses buttons with `gb.setButton`.
 
 import { Button } from '../core/constants.ts';
-import type { GameBoy } from '../core/gameboy.ts';
+import type { Emulator } from '../core/emulator.ts';
 import type { Gen1Data } from '../gen1/rom.ts';
 import type { Gen1Symbols } from '../gen1/symbols.ts';
 import { decodeText } from '../gen1/text.ts';
@@ -83,7 +83,7 @@ const DELTA: Record<Dir, [number, number]> = { up: [0, -1], down: [0, 1], left: 
 const OPPOSITE: Record<Dir, Dir> = { up: 'down', down: 'up', left: 'right', right: 'left' };
 
 export class Grinder {
-  private readonly gb: GameBoy;
+  private readonly gb: Emulator;
   private readonly data: Gen1Data;
   private readonly sym: Gen1Symbols;
   private readonly opts: GrindOptions;
@@ -123,7 +123,7 @@ export class Grinder {
   private ended: GrindEnd | null = null;
   private progress: GrindProgress;
 
-  constructor(gb: GameBoy, data: Gen1Data, opts: GrindOptions) {
+  constructor(gb: Emulator, data: Gen1Data, opts: GrindOptions) {
     this.gb = gb;
     this.data = data;
     this.sym = data.sym;
@@ -150,7 +150,7 @@ export class Grinder {
   }
 
   /** Why the bot can't start here, or null if it can. */
-  static problem(gb: GameBoy, data: Gen1Data, targetLevel: number): string | null {
+  static problem(gb: Emulator, data: Gen1Data, targetLevel: number): string | null {
     const sym = data.sym;
     const snap = new Gen1Reader(sym).read({ u8: (a) => gb.peek(a) });
     if (!snap.valid || snap.party.length === 0) return 'Load a save with a Pokémon first.';
@@ -303,7 +303,7 @@ export class Grinder {
   }
 
   /** Directions whose neighbouring tile can have wild Pokémon, best first. */
-  private static pacingDirs(gb: GameBoy, sym: Gen1Symbols, mapId: number): Dir[] {
+  private static pacingDirs(gb: Emulator, sym: Gen1Symbols, mapId: number): Dir[] {
     const anyTile = mapId >= FIRST_INDOOR_MAP && gb.peek(sym.wGrassRate) > 0;
     const grass = gb.peek(sym.wGrassTile);
     // The player stands on screen tiles (8..9, 8..9); the game checks (8, 9).
