@@ -14,11 +14,23 @@ const WRAM = [
   'wEnemyMonMaxHP', 'wBattleMon', 'wBattleMonHP', 'wBattleMonNick', 'wPlayerMonNumber', 'wBoxCount',
   'wBoxSpecies', 'wBoxMons', 'wBoxMonOT', 'wBoxMonNicks', 'wObtainedBadges', 'wPlayerName', 'wPlayerID',
   'wPokedexOwned', 'wPokedexSeen', 'wCurOpponent', 'wTrainerClass', 'wTrainerNo', 'wGymLeaderNo',
-  'wBattleType', 'wCurrentBoxNum', 'wPlayerMoney', 'wEnemyPartyCount', 'wEnemyMons', 'wCurMapTileset',
-  'wGrassRate', 'wGrassMons', 'wWaterRate', 'wWaterMons', 'wPlayTimeHours', 'wPlayTimeMinutes',
+  'wBattleType', 'wCurrentBoxNum', 'wPlayerMoney', 'wEnemyPartyCount', 'wEnemyMons', 'wGrassRate', 'wGrassMons', 'wWaterRate', 'wWaterMons', 'wPlayTimeHours', 'wPlayTimeMinutes',
   'wPlayTimeSeconds', 'wNumBagItems', 'wBagItems', 'wCapturedMonSpecies', 'wNumSafariBalls', 'wXCoord',
   'wYCoord', 'wLinkState', 'wOptions', 'wStatusFlags5', 'wStatusFlags6', 'wEventFlags', 'wLastMap',
   'wRepelRemainingSteps',
+  // Auto-grind: menu state, screen tiles and the active Pokémon's PP.
+  'wTopMenuItemY', 'wTopMenuItemX', 'wCurrentMenuItem', 'wMaxMenuItem', 'wListScrollOffset', 'wTileMap',
+  'wGrassTile', 'wBattleMonPP',
+];
+// Routines the auto-grind bot looks for on the game's call stack, emitted as
+// [bank, start, end) ranges. Bankswitch and Predef push the caller's bank.
+const ROUTINES = [
+  'Bankswitch', 'Predef', 'OverworldLoop', 'OverworldLoopLessDelay', 'HandleMenuInput_', 'DisplayBattleMenu',
+  'SelectMenuItem', 'MoveSelectionMenu', 'DisplayTwoOptionMenu', 'WaitForTextScrollButtonPress',
+  'ManualTextScroll', 'DontAbandonLearning', 'TryingToLearn', 'AbandonLearning', 'EvolveMon', 'Evolution_PartyMonLoop',
+  'HandlePartyMenuInput', 'DisplayStartMenu', 'RedisplayStartMenu', 'DisplayListMenuIDLoop',
+  'DisplayChooseQuantityMenu', 'StartMenu_Item', 'ItemMenuLoop', 'HandlePlayerMonFainted', 'ChooseNextMon',
+  'DisplayTextID',
 ];
 const ROM = [
   'MonsterNames', 'PokedexOrder', 'BaseStats', 'MewBaseStats', 'WildDataPointers', 'MoveNames', 'Moves',
@@ -39,6 +51,22 @@ function parseSym(file: string): Map<string, { bank: number; addr: number }> {
   return m;
 }
 
+/** Global (non-local) ROM labels per bank, sorted, for routine end addresses. */
+function routineRanges(file: string): Map<string, [number, number, number]> {
+  const labels: { bank: number; addr: number; name: string }[] = [];
+  for (const line of readFileSync(file, 'utf8').split('\n')) {
+    const r = /^([0-9a-f]{2}):([0-9a-f]{4}) (\S+)$/.exec(line.trim());
+    if (r && !r[3].includes('.') && parseInt(r[2], 16) < 0x8000) labels.push({ bank: parseInt(r[1], 16), addr: parseInt(r[2], 16), name: r[3] });
+  }
+  labels.sort((a, b) => a.bank - b.bank || a.addr - b.addr);
+  const out = new Map<string, [number, number, number]>();
+  labels.forEach((l, i) => {
+    const next = labels.slice(i + 1).find((n) => n.bank === l.bank && n.addr > l.addr);
+    out.set(l.name, [l.bank, l.addr, next ? next.addr : l.bank === 0 ? 0x4000 : 0x8000]);
+  });
+  return out;
+}
+
 function romOffset(s: { bank: number; addr: number }): number {
   return s.bank === 0 ? s.addr : s.bank * 0x4000 + (s.addr - 0x4000);
 }
@@ -55,6 +83,8 @@ for (const n of WRAM) out += `  ${n}: number;\n`;
 for (const n of ROM) out += `  ${n}: number; // flat ROM offset (-1 if absent)\n`;
 for (const n of SRAM) out += `  ${n}: number; // flat SRAM offset\n`;
 out += '  picBanks: number[]; // bank per pic section 1..5\n';
+out += '  /** Routine address ranges for the auto-grind bot: name -> [bank, start, end). */\n';
+out += '  routines: Record<string, [number, number, number]>;\n';
 out += '}\n\n';
 out += 'export const SYMBOLS: Record<"red" | "blue" | "yellow", Gen1Symbols> = {\n';
 for (const [ver, file] of Object.entries(versions)) {
@@ -80,6 +110,14 @@ for (const [ver, file] of Object.entries(versions)) {
     return s.bank;
   });
   out += `    picBanks: [${banks.join(', ')}],\n`;
+  const ranges = routineRanges(file);
+  out += '    routines: {\n';
+  for (const n of ROUTINES) {
+    const r = ranges.get(n);
+    if (!r) throw new Error(`${ver}: missing routine ${n}`);
+    out += `      ${n}: [0x${r[0].toString(16)}, 0x${r[1].toString(16)}, 0x${r[2].toString(16)}],\n`;
+  }
+  out += '    },\n';
   out += '  },\n';
 }
 out += '};\n';

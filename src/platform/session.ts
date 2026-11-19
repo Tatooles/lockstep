@@ -1,5 +1,6 @@
 // A play session: emulator + frame loop + audio + Nuzlocke tracker + persistence.
 
+import { Grinder, type GrindEnd, type GrindProgress } from '../bot/grinder.ts';
 import { FRAME_RATE, SCREEN_H, SCREEN_W } from '../core/constants.ts';
 import { GameBoy } from '../core/gameboy.ts';
 import { nextMilestone, readMilestones, type Milestone } from '../gen1/milestones.ts';
@@ -30,11 +31,22 @@ export interface SessionView {
   fps: number;
   muted: boolean;
   version: string | null;
+  /** Auto-grind progress while the bot is playing. */
+  grind: GrindProgress | null;
+  /** Why the last auto-grind stopped, until dismissed. */
+  grindEnd: (GrindEnd & { summary: string }) | null;
   rev: number;
+}
+
+export interface GrindSettings {
+  targetLevel: number;
+  usePotions: boolean;
 }
 
 const FRAME_MS = 1000 / FRAME_RATE;
 const TRACK_EVERY = 4;
+/** Main-thread time per animation frame spent emulating while auto-grind runs. */
+const GRIND_BUDGET_MS = 12;
 
 export class Session {
   readonly gb: GameBoy;
@@ -64,6 +76,10 @@ export class Session {
   private repel = false;
   private repelApplied = false;
   private muted = false;
+  private grinder: Grinder | null = null;
+  private grindEnd: SessionView['grindEnd'] = null;
+  private grindStartedAt = 0;
+  private wakeLock: { release: () => Promise<void> } | null = null;
   private fpsFrames = 0;
   private fpsAt = 0;
   private fps = 0;
@@ -142,6 +158,8 @@ export class Session {
       fps: this.fps,
       muted: this.muted,
       version: this.data?.version ?? null,
+      grind: this.grinder ? { ...this.grinder.getProgress() } : null,
+      grindEnd: this.grindEnd,
       rev: this.rev,
     };
   }
@@ -205,6 +223,10 @@ export class Session {
     this.last = now;
     if (dt > 100) dt = FRAME_MS; // came back from a stall: don't spiral
     if (this.paused || this.hidden) return;
+    if (this.grinder) {
+      this.tickGrind(now);
+      return;
+    }
     const apu = this.gb.apu;
     const audioOn = this.speed === 1 && !this.muted && this.audio.ready;
     apu.outputEnabled = audioOn;
@@ -243,6 +265,132 @@ export class Session {
       this.publishAt = now;
       this.expireToasts(now);
       this.publish();
+    }
+  }
+
+  // ---- auto-grind ----
+
+  /** Why auto-grind can't start right now, or null. */
+  grindProblem(targetLevel: number): string | null {
+    if (!this.data) return 'Auto-grind works with Pokémon Red, Blue and Yellow.';
+    return Grinder.problem(this.gb, this.data, targetLevel);
+  }
+
+  startGrind(settings: GrindSettings): string | null {
+    const problem = this.grindProblem(settings.targetLevel);
+    if (problem || !this.data) return problem;
+    for (let i = 0; i < 8; i++) this.gb.setButton(i, false);
+    const data = this.data;
+    this.grinder = new Grinder(this.gb, data, {
+      ...settings,
+      handBack: (snap) => this.grindHandBack(snap),
+    });
+    this.grindEnd = null;
+    this.grindStartedAt = performance.now();
+    this.paused = false;
+    this.acc = 0;
+    this.audio.clear();
+    void this.keepAwake(true);
+    this.publish();
+    return null;
+  }
+
+  /** Stop the bot. A user stop doesn't pause or show a summary. */
+  stopGrind(): void {
+    if (!this.grinder) return;
+    this.grinder.dispose();
+    this.grinder = null;
+    void this.keepAwake(false);
+    this.publish();
+  }
+
+  dismissGrindEnd(): void {
+    this.setPaused(false);
+  }
+
+  get grinding(): boolean {
+    return this.grinder !== null;
+  }
+
+  /** A wild battle worth a human: the area's first encounter, or (with no run) a species not caught yet. */
+  private grindHandBack(snap: Snapshot): string | null {
+    const data = this.data;
+    const enemy = snap.enemy;
+    if (!data || !enemy) return null;
+    const name = data.speciesName(enemy.species);
+    if (this.run) {
+      const enc = this.run.encounters.find((e) => e.id === this.run?.activeEncounterId);
+      return enc?.outcome === 'pending' ? `Wild ${name}: your first encounter on ${enc.area}. It's all yours.` : null;
+    }
+    const dex = data.species.get(enemy.species)?.dex ?? 0;
+    if (dex > 0) {
+      const owned = this.gb.peek(data.sym.wPokedexOwned + ((dex - 1) >> 3)) & (1 << ((dex - 1) & 7));
+      if (!owned) return `Wild ${name}: you haven't caught one yet.`;
+    }
+    return null;
+  }
+
+  private tickGrind(now: number): void {
+    const grinder = this.grinder!;
+    this.gb.apu.outputEnabled = false;
+    let frames = 0;
+    let end: GrindEnd | null = null;
+    while (performance.now() - now < GRIND_BUDGET_MS) {
+      this.gb.runFrame();
+      frames++;
+      if (++this.frameNo % TRACK_EVERY === 0) this.track();
+      end = grinder.step();
+      if (end) break;
+    }
+    this.acc = 0;
+    this.gb.apu.clearBuffer();
+    this.present();
+    this.fpsFrames += frames;
+    if (now - this.fpsAt > 1000) {
+      this.fps = Math.round((this.fpsFrames * 1000) / (now - this.fpsAt));
+      this.fpsFrames = 0;
+      this.fpsAt = now;
+    }
+    if (end) {
+      this.finishGrind(end);
+      return;
+    }
+    if (now - this.publishAt > 250) {
+      this.publishAt = now;
+      this.expireToasts(now);
+      this.publish();
+    }
+  }
+
+  private finishGrind(end: GrindEnd): void {
+    const p = this.grinder!.getProgress();
+    this.grinder!.dispose();
+    this.grinder = null;
+    void this.keepAwake(false);
+    const parts = [p.level > p.startLevel ? `Lv ${p.startLevel} → ${p.level}` : `Lv ${p.level}`, `${p.battles} ${p.battles === 1 ? 'battle' : 'battles'}`];
+    const secs = Math.round((performance.now() - this.grindStartedAt) / 1000);
+    parts.push(secs < 90 ? `${secs}s` : `${Math.round(secs / 60)} min`);
+    this.grindEnd = { ...end, summary: parts.join(' · ') };
+    // Freeze on the moment that needs you (an evolution keeps animating otherwise).
+    this.paused = true;
+    this.audio.clear();
+    if ('vibrate' in navigator) navigator.vibrate?.(end.kind === 'done' ? 30 : [30, 60, 30]);
+    this.publish();
+  }
+
+  /** Hold a screen wake lock while the bot plays, where the browser supports it. */
+  private async keepAwake(on: boolean): Promise<void> {
+    try {
+      if (on && !this.wakeLock) {
+        const wl = (navigator as Navigator & { wakeLock?: { request(t: 'screen'): Promise<{ release: () => Promise<void> }> } }).wakeLock;
+        this.wakeLock = (await wl?.request('screen')) ?? null;
+      } else if (!on && this.wakeLock) {
+        const lock = this.wakeLock;
+        this.wakeLock = null;
+        await lock.release();
+      }
+    } catch {
+      this.wakeLock = null;
     }
   }
 
@@ -364,6 +512,12 @@ export class Session {
 
   // ---- input & controls ----
   press(button: number, down: boolean): void {
+    // Any button takes over from the bot, or resumes play after it handed back.
+    if (this.grinder) {
+      if (!down) return;
+      this.stopGrind();
+    }
+    if (down && this.grindEnd) this.dismissGrindEnd();
     this.gb.setButton(button, down);
     if (down) void this.audio.unlock();
   }
@@ -382,6 +536,8 @@ export class Session {
 
   setPaused(p: boolean): void {
     this.paused = p;
+    // Resuming, however it happens, means the hand-back card has been seen.
+    if (!p) this.grindEnd = null;
     if (p) this.audio.clear();
     this.last = performance.now();
     this.acc = 0;
@@ -395,6 +551,7 @@ export class Session {
   }
 
   reset(): void {
+    this.stopGrind();
     // Soft reset: rebuild the machine, keeping battery RAM.
     const ram = this.gb.cart.ram.slice();
     const fresh = new GameBoy(this.rom.data);
@@ -426,6 +583,7 @@ export class Session {
     if (!this.canUseStates()) throw new Error('Save states are disabled for this run');
     const rec = await db.getState(this.rom.key, slot);
     if (!rec) return false;
+    this.stopGrind();
     this.gb.loadState(rec.state);
     this.differ.reset();
     this.differ.seedKnown(Object.keys(this.run?.mons ?? {}));
@@ -465,6 +623,11 @@ export class Session {
 
   private handleShow(): void {
     this.hidden = false;
+    // The browser drops wake locks when the page hides.
+    if (this.grinder) {
+      this.wakeLock = null;
+      void this.keepAwake(true);
+    }
     this.last = performance.now();
     this.acc = 0;
     this.audio.clear();
@@ -484,6 +647,7 @@ export class Session {
   }
 
   async destroy(): Promise<void> {
+    this.stopGrind();
     this.destroyed = true;
     cancelAnimationFrame(this.raf);
     clearInterval(this.sramTimer);

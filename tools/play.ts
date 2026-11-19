@@ -14,6 +14,9 @@
 //   resume            marks where skipping from `stopif` ends
 //   repel on|off      endless Repel, like the app setting
 //   poke ADDR VAL     write a byte (test setup only, e.g. text speed); numbers may be 0x-prefixed
+//   chain             print the game's call chain and what screen the bot thinks is up
+//   grind LEVEL [N] [nopotions] [nohandback]  auto-grind the lead to LEVEL (max N frames), handing back on first encounters
+//                     (set GRIND_TRACE=<frame> to log every screen change the bot sees from that frame on)
 // Buttons: a b start select up down left right
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -27,6 +30,8 @@ import { SYMBOLS } from '../src/gen1/symbols.ts';
 import { EventDiffer, Gen1Reader, type Snapshot } from '../src/gen1/watcher.ts';
 import { MAPS } from '../src/gen1/maps.ts';
 import { applyEvent, newRun, syncMons } from '../src/run/engine.ts';
+import { Grinder } from '../src/bot/grinder.ts';
+import { callChain, classify } from '../src/bot/screen.ts';
 
 const OUT = join(import.meta.dirname, 'out');
 mkdirSync(OUT, { recursive: true });
@@ -188,6 +193,55 @@ for (const raw of script.split(/[\n;]/)) {
       // Test setup only (e.g. text speed); the tracker never writes memory.
       gb.bus.write(Number(a1), Number(a2));
       break;
+    case 'grind': {
+      const target = n(a1, 100);
+      const problem = Grinder.problem(gb, data, target);
+      if (problem) {
+        console.log(`[f${frame}] grind: can't start: ${problem}`);
+        break;
+      }
+      const bot = new Grinder(gb, data, {
+        targetLevel: target,
+        usePotions: !line.includes('nopotions'),
+        handBack: () => {
+          if (line.includes('nohandback')) return null;
+          const enc = run.encounters.find((e) => e.id === run.activeEncounterId);
+          return enc?.outcome === 'pending' ? `First encounter: ${data.speciesName(enc.species)}` : null;
+        },
+      });
+      const max = n(a2, 200000);
+      const t0 = performance.now();
+      let end = null;
+      let lastActivity = '';
+      let traceLast = '';
+      for (let i = 0; i < max && !end; i++) {
+        step(1);
+        end = bot.step();
+        if (process.env.GRIND_TRACE && frame >= Number(process.env.GRIND_TRACE)) {
+          const c = callChain(gb, data.sym);
+          const t = `${classify(c)} ${c.join('<')} btn=${gb.bus.pressed} bank=${gb.cart.currentRomBank} pc=${gb.cpu.pc.toString(16)}`;
+          if (t !== traceLast) console.log(`[f${frame}] ${t}`);
+          traceLast = t;
+        }
+        const p = bot.getProgress();
+        if (p.activity !== lastActivity) {
+          lastActivity = p.activity;
+          const s = last as Snapshot | null;
+          const hp = s?.party[0] ? `${s.party[0].hp}/${s.party[0].maxHp}` : '';
+          console.log(`[f${frame}] grind: ${p.activity} (L${p.level}, ${p.battles} battles, hp ${hp})`);
+        }
+      }
+      bot.dispose();
+      const p = bot.getProgress();
+      const secs = (performance.now() - t0) / 1000;
+      console.log(`[f${frame}] grind ${end ? end.kind + ': ' + end.message : 'TIMEOUT'} | L${p.startLevel}->L${p.level}, ${p.battles} battles, ran ${p.ran}, ${p.frames} frames (${(p.frames / 60 / 60).toFixed(1)} game min) in ${secs.toFixed(1)}s = ${(p.frames / 59.73 / secs).toFixed(0)}x`);
+      break;
+    }
+    case 'chain': {
+      const c = callChain(gb, data.sym);
+      console.log(`[f${frame}] screen=${classify(c)} chain=${c.join(' < ')}`);
+      break;
+    }
     case 'shot':
       shot(a1 ?? String(frame));
       break;

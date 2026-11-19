@@ -38,7 +38,6 @@ export interface Gen1Symbols {
   wPlayerMoney: number;
   wEnemyPartyCount: number;
   wEnemyMons: number;
-  wCurMapTileset: number;
   wGrassRate: number;
   wGrassMons: number;
   wWaterRate: number;
@@ -59,6 +58,14 @@ export interface Gen1Symbols {
   wEventFlags: number;
   wLastMap: number;
   wRepelRemainingSteps: number;
+  wTopMenuItemY: number;
+  wTopMenuItemX: number;
+  wCurrentMenuItem: number;
+  wMaxMenuItem: number;
+  wListScrollOffset: number;
+  wTileMap: number;
+  wGrassTile: number;
+  wBattleMonPP: number;
   MonsterNames: number; // flat ROM offset (-1 if absent)
   PokedexOrder: number; // flat ROM offset (-1 if absent)
   BaseStats: number; // flat ROM offset (-1 if absent)
@@ -86,6 +93,8 @@ export interface Gen1Symbols {
   sBox1: number; // flat SRAM offset
   sBox7: number; // flat SRAM offset
   picBanks: number[]; // bank per pic section 1..5
+  /** Routine address ranges for the auto-grind bot: name -> [bank, start, end). */
+  routines: Record<string, [number, number, number]>;
 }
 
 export const SYMBOLS: Record<"red" | "blue" | "yellow", Gen1Symbols> = {
@@ -127,7 +136,6 @@ export const SYMBOLS: Record<"red" | "blue" | "yellow", Gen1Symbols> = {
     wPlayerMoney: 0xd347,
     wEnemyPartyCount: 0xd89c,
     wEnemyMons: 0xd8a4,
-    wCurMapTileset: 0xd367,
     wGrassRate: 0xd887,
     wGrassMons: 0xd888,
     wWaterRate: 0xd8a4,
@@ -148,6 +156,14 @@ export const SYMBOLS: Record<"red" | "blue" | "yellow", Gen1Symbols> = {
     wEventFlags: 0xd747,
     wLastMap: 0xd365,
     wRepelRemainingSteps: 0xd0db,
+    wTopMenuItemY: 0xcc24,
+    wTopMenuItemX: 0xcc25,
+    wCurrentMenuItem: 0xcc26,
+    wMaxMenuItem: 0xcc28,
+    wListScrollOffset: 0xcc36,
+    wTileMap: 0xc3a0,
+    wGrassTile: 0xd535,
+    wBattleMonPP: 0xd02d,
     MonsterNames: 0x1c21e,
     PokedexOrder: 0x41024,
     BaseStats: 0x383de,
@@ -175,6 +191,34 @@ export const SYMBOLS: Record<"red" | "blue" | "yellow", Gen1Symbols> = {
     sBox1: 0x4000,
     sBox7: 0x6000,
     picBanks: [9, 10, 11, 12, 13],
+    routines: {
+      Bankswitch: [0x0, 0x35d6, 0x35ec],
+      Predef: [0x0, 0x3e6d, 0x3e94],
+      OverworldLoop: [0x0, 0x3ff, 0x402],
+      OverworldLoopLessDelay: [0x0, 0x402, 0x683],
+      HandleMenuInput_: [0x0, 0x3ac2, 0x3b7c],
+      DisplayBattleMenu: [0xf, 0x4eb3, 0x500e],
+      SelectMenuItem: [0xf, 0x52fe, 0x53ae],
+      MoveSelectionMenu: [0xf, 0x5219, 0x52fe],
+      DisplayTwoOptionMenu: [0x1, 0x7559, 0x763e],
+      WaitForTextScrollButtonPress: [0x0, 0x3865, 0x3898],
+      ManualTextScroll: [0x0, 0x3898, 0x38ac],
+      DontAbandonLearning: [0x1, 0x6e5b, 0x6eda],
+      TryingToLearn: [0x1, 0x6f07, 0x6fad],
+      AbandonLearning: [0x1, 0x6eda, 0x6efe],
+      EvolveMon: [0x1e, 0x7de9, 0x7eb4],
+      Evolution_PartyMonLoop: [0xe, 0x6d2e, 0x6ef7],
+      HandlePartyMenuInput: [0x0, 0x145a, 0x14d4],
+      DisplayStartMenu: [0x0, 0x2acd, 0x2adf],
+      RedisplayStartMenu: [0x0, 0x2adf, 0x2b70],
+      DisplayListMenuIDLoop: [0x0, 0x2c53, 0x2d57],
+      DisplayChooseQuantityMenu: [0x0, 0x2d57, 0x2e30],
+      StartMenu_Item: [0x4, 0x7302, 0x742a],
+      ItemMenuLoop: [0x4, 0x72fc, 0x7302],
+      HandlePlayerMonFainted: [0xf, 0x4700, 0x4741],
+      ChooseNextMon: [0xf, 0x47d8, 0x4837],
+      DisplayTextID: [0x0, 0x2920, 0x29d6],
+    },
   },
   blue: {
     wIsInBattle: 0xd057,
@@ -214,7 +258,6 @@ export const SYMBOLS: Record<"red" | "blue" | "yellow", Gen1Symbols> = {
     wPlayerMoney: 0xd347,
     wEnemyPartyCount: 0xd89c,
     wEnemyMons: 0xd8a4,
-    wCurMapTileset: 0xd367,
     wGrassRate: 0xd887,
     wGrassMons: 0xd888,
     wWaterRate: 0xd8a4,
@@ -235,6 +278,14 @@ export const SYMBOLS: Record<"red" | "blue" | "yellow", Gen1Symbols> = {
     wEventFlags: 0xd747,
     wLastMap: 0xd365,
     wRepelRemainingSteps: 0xd0db,
+    wTopMenuItemY: 0xcc24,
+    wTopMenuItemX: 0xcc25,
+    wCurrentMenuItem: 0xcc26,
+    wMaxMenuItem: 0xcc28,
+    wListScrollOffset: 0xcc36,
+    wTileMap: 0xc3a0,
+    wGrassTile: 0xd535,
+    wBattleMonPP: 0xd02d,
     MonsterNames: 0x1c21e,
     PokedexOrder: 0x41024,
     BaseStats: 0x383de,
@@ -262,6 +313,34 @@ export const SYMBOLS: Record<"red" | "blue" | "yellow", Gen1Symbols> = {
     sBox1: 0x4000,
     sBox7: 0x6000,
     picBanks: [9, 10, 11, 12, 13],
+    routines: {
+      Bankswitch: [0x0, 0x35d6, 0x35ec],
+      Predef: [0x0, 0x3e6d, 0x3e94],
+      OverworldLoop: [0x0, 0x3ff, 0x402],
+      OverworldLoopLessDelay: [0x0, 0x402, 0x683],
+      HandleMenuInput_: [0x0, 0x3ac2, 0x3b7c],
+      DisplayBattleMenu: [0xf, 0x4eb3, 0x500e],
+      SelectMenuItem: [0xf, 0x52fe, 0x53ae],
+      MoveSelectionMenu: [0xf, 0x5219, 0x52fe],
+      DisplayTwoOptionMenu: [0x1, 0x7559, 0x763e],
+      WaitForTextScrollButtonPress: [0x0, 0x3865, 0x3898],
+      ManualTextScroll: [0x0, 0x3898, 0x38ac],
+      DontAbandonLearning: [0x1, 0x6e5b, 0x6eda],
+      TryingToLearn: [0x1, 0x6f07, 0x6fad],
+      AbandonLearning: [0x1, 0x6eda, 0x6efe],
+      EvolveMon: [0x1e, 0x7de9, 0x7eb4],
+      Evolution_PartyMonLoop: [0xe, 0x6d2e, 0x6ef7],
+      HandlePartyMenuInput: [0x0, 0x145a, 0x14d4],
+      DisplayStartMenu: [0x0, 0x2acd, 0x2adf],
+      RedisplayStartMenu: [0x0, 0x2adf, 0x2b70],
+      DisplayListMenuIDLoop: [0x0, 0x2c53, 0x2d57],
+      DisplayChooseQuantityMenu: [0x0, 0x2d57, 0x2e30],
+      StartMenu_Item: [0x4, 0x7302, 0x742a],
+      ItemMenuLoop: [0x4, 0x72fc, 0x7302],
+      HandlePlayerMonFainted: [0xf, 0x4700, 0x4741],
+      ChooseNextMon: [0xf, 0x47d8, 0x4837],
+      DisplayTextID: [0x0, 0x2920, 0x29d6],
+    },
   },
   yellow: {
     wIsInBattle: 0xd056,
@@ -301,7 +380,6 @@ export const SYMBOLS: Record<"red" | "blue" | "yellow", Gen1Symbols> = {
     wPlayerMoney: 0xd346,
     wEnemyPartyCount: 0xd89b,
     wEnemyMons: 0xd8a3,
-    wCurMapTileset: 0xd366,
     wGrassRate: 0xd886,
     wGrassMons: 0xd887,
     wWaterRate: 0xd8a3,
@@ -322,6 +400,14 @@ export const SYMBOLS: Record<"red" | "blue" | "yellow", Gen1Symbols> = {
     wEventFlags: 0xd746,
     wLastMap: 0xd364,
     wRepelRemainingSteps: 0xd0da,
+    wTopMenuItemY: 0xcc24,
+    wTopMenuItemX: 0xcc25,
+    wCurrentMenuItem: 0xcc26,
+    wMaxMenuItem: 0xcc28,
+    wListScrollOffset: 0xcc36,
+    wTileMap: 0xc3a0,
+    wGrassTile: 0xd534,
+    wBattleMonPP: 0xd02c,
     MonsterNames: 0xe8000,
     PokedexOrder: 0x410b1,
     BaseStats: 0x383de,
@@ -349,5 +435,33 @@ export const SYMBOLS: Record<"red" | "blue" | "yellow", Gen1Symbols> = {
     sBox1: 0x4000,
     sBox7: 0x6000,
     picBanks: [9, 10, 11, 12, 13],
+    routines: {
+      Bankswitch: [0x0, 0x3e84, 0x3e98],
+      Predef: [0x0, 0x3eb4, 0x3ed7],
+      OverworldLoop: [0x0, 0x242, 0x245],
+      OverworldLoopLessDelay: [0x0, 0x245, 0x457],
+      HandleMenuInput_: [0x0, 0x3aaf, 0x3b6d],
+      DisplayBattleMenu: [0xf, 0x4f78, 0x510a],
+      SelectMenuItem: [0xf, 0x53fe, 0x54ae],
+      MoveSelectionMenu: [0xf, 0x5320, 0x53fe],
+      DisplayTwoOptionMenu: [0x1, 0x742d, 0x74e7],
+      WaitForTextScrollButtonPress: [0x0, 0x3852, 0x388e],
+      ManualTextScroll: [0x0, 0x388e, 0x38a5],
+      DontAbandonLearning: [0x1, 0x6be0, 0x6c5f],
+      TryingToLearn: [0x1, 0x6c8c, 0x6d31],
+      AbandonLearning: [0x1, 0x6c5f, 0x6c83],
+      EvolveMon: [0x17, 0x5a70, 0x5b32],
+      Evolution_PartyMonLoop: [0xe, 0x6dd8, 0x6fa8],
+      HandlePartyMenuInput: [0x0, 0x1226, 0x12cc],
+      DisplayStartMenu: [0x0, 0x29d1, 0x29e1],
+      RedisplayStartMenu: [0x0, 0x29e1, 0x29e9],
+      DisplayListMenuIDLoop: [0x0, 0x2b4d, 0x2c51],
+      DisplayChooseQuantityMenu: [0x0, 0x2c51, 0x2d28],
+      StartMenu_Item: [0x4, 0x5ead, 0x5fd4],
+      ItemMenuLoop: [0x4, 0x5ea7, 0x5ead],
+      HandlePlayerMonFainted: [0xf, 0x471d, 0x475e],
+      ChooseNextMon: [0xf, 0x483c, 0x489c],
+      DisplayTextID: [0x0, 0x2817, 0x28c6],
+    },
   },
 };

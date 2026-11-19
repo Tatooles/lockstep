@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import type { Session } from '../platform/session.ts';
 import { Controls, useGamepad, useKeyboard } from './Controls.tsx';
 import { hpClass, routeInfo, routeLine } from './derive.ts';
+import { GrindModal } from './GrindModal.tsx';
 import { NewRunModal } from './NewRunModal.tsx';
 import { prefs } from './prefs.ts';
 import { Sheet, type TabId } from './Sheet.tsx';
@@ -12,13 +13,14 @@ export function Play({ session, onExit }: { session: Session; onExit: () => void
   const p = useSyncExternalStore(prefs.subscribe, prefs.get);
   const [sheet, setSheet] = useState<TabId | null>(null);
   const [newRun, setNewRun] = useState(false);
+  const [grindSetup, setGrindSetup] = useState(false);
   const data = session.data;
   const { snap, run } = view;
   const info = routeInfo(data, run, snap);
   const isDesktop = typeof window !== 'undefined' && window.matchMedia('(min-width: 1000px) and (min-height: 600px) and (hover: hover)').matches;
   const sheetOpen = sheet !== null || isDesktop;
 
-  useKeyboard(session, !newRun);
+  useKeyboard(session, !newRun && !grindSetup);
   useGamepad(session);
 
   useEffect(() => {
@@ -72,6 +74,8 @@ export function Play({ session, onExit }: { session: Session; onExit: () => void
   const cap = view.milestone;
   const overCap = !!(cap && snap && run?.rules.levelCaps && snap.party.some((m) => m.level > cap.ace && run.mons[m.key]?.status !== 'dead'));
   const party = snap?.party ?? [];
+  const grind = view.grind;
+  const grindEnd = view.grindEnd;
 
   return (
     <div className="play" onPointerDown={() => void session.audio.unlock()}>
@@ -81,16 +85,37 @@ export function Play({ session, onExit }: { session: Session; onExit: () => void
             <path d="M15 5l-7 7 7 7" />
           </svg>
         </button>
-        <button className={`route-chip ${info.state}`} onClick={onChip}>
-          <span className="dot" aria-hidden="true">
-            {info.encounter && <Sprite data={data} species={info.encounter.species} />}
-          </span>
-          <span className="txt">
-            <span className="area">{data ? info.area : session.rom.name}</span>
-            <span className="state">{data ? routeLine(info, data) : 'Tracking unavailable for this game'}</span>
-          </span>
-        </button>
-        {cap && run && (
+        {grind ? (
+          <>
+            <div className="route-chip grind-chip" role="status">
+              <span className="dot" aria-hidden="true">
+                <Sprite data={data} species={grind.species} alt="" />
+              </span>
+              <span className="txt">
+                <span className="area">
+                  Grinding · Lv {grind.level} → {grind.targetLevel}
+                </span>
+                <span className="state">
+                  {grind.activity} · {grind.battles} {grind.battles === 1 ? 'battle' : 'battles'}
+                </span>
+              </span>
+            </div>
+            <button className="grind-stop" onClick={() => session.stopGrind()}>
+              Stop
+            </button>
+          </>
+        ) : (
+          <button className={`route-chip ${info.state}`} onClick={onChip}>
+            <span className="dot" aria-hidden="true">
+              {info.encounter && <Sprite data={data} species={info.encounter.species} />}
+            </span>
+            <span className="txt">
+              <span className="area">{data ? info.area : session.rom.name}</span>
+              <span className="state">{data ? routeLine(info, data) : 'Tracking unavailable for this game'}</span>
+            </span>
+          </button>
+        )}
+        {!grind && cap && run && (
           <button className={`cap-chip${overCap ? ' over' : ''}`} onClick={() => openSheet('team')} aria-label={`Level cap ${cap.ace} for ${cap.name}`}>
             <b>{cap.ace}</b>
             cap
@@ -101,9 +126,22 @@ export function Play({ session, onExit }: { session: Session; onExit: () => void
       <div className="screen-wrap">
         <canvas ref={canvasRef} className="screen" aria-label="Game screen" />
         <div className="screen-badges">
-          {view.speed > 1 && <span className="speed-pill">{view.speed}× speed</span>}
+          {grind ? (
+            <span className="speed-pill turbo">{view.fps > 60 ? `${Math.round(view.fps / 60)}×` : 'Turbo'}</span>
+          ) : (
+            view.speed > 1 && <span className="speed-pill">{view.speed}× speed</span>
+          )}
         </div>
-        {view.paused && !sheetOpen && (
+        {grindEnd ? (
+          <div className={`grind-end ${grindEnd.kind}`} role="alertdialog" aria-labelledby="grind-end-title">
+            <strong id="grind-end-title">{grindEnd.kind === 'done' ? 'Grind complete' : grindEnd.kind === 'handback' ? 'Your turn' : 'Grind stopped'}</strong>
+            <p>{grindEnd.message}</p>
+            <small>{grindEnd.summary}</small>
+            <button className="btn primary" onClick={() => session.dismissGrindEnd()} autoFocus>
+              Play
+            </button>
+          </div>
+        ) : view.paused && !sheetOpen && (
           <button className="pause-overlay" onClick={() => session.setPaused(false)}>
             Paused. Tap to resume
           </button>
@@ -133,7 +171,7 @@ export function Play({ session, onExit }: { session: Session; onExit: () => void
 
       <div className="lower">
         {view.warnings.length > 0 && <div className="warn-bar" role="status">{view.warnings[0]}</div>}
-        <Controls session={session} speed={view.speed} onMenu={() => openSheet()} />
+        <Controls session={session} speed={view.speed} onMenu={() => openSheet()} onGrind={data ? () => setGrindSetup(true) : undefined} />
         <p className="keys-hint">Arrows move, X is A, Z is B, Enter is Start, Shift is Select. Space changes speed, P pauses.</p>
       </div>
 
@@ -163,6 +201,7 @@ export function Play({ session, onExit }: { session: Session; onExit: () => void
       )}
 
       {newRun && data && <NewRunModal session={session} onClose={() => setNewRun(false)} />}
+      {grindSetup && data && <GrindModal session={session} onClose={() => setGrindSetup(false)} />}
     </div>
   );
 }

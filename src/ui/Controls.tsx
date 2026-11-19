@@ -211,7 +211,7 @@ export function useGamepad(session: Session) {
   }, [session]);
 }
 
-export function Controls({ session, speed, onMenu }: { session: Session; speed: number; onMenu: () => void }) {
+export function Controls({ session, speed, onMenu, onGrind }: { session: Session; speed: number; onMenu: () => void; onGrind?: () => void }) {
   return (
     <div className="controls">
       <DPad session={session} />
@@ -232,6 +232,11 @@ export function Controls({ session, speed, onMenu }: { session: Session; speed: 
         >
           {speed > 1 ? `${speed}×` : '1×'}
         </button>
+        {onGrind && (
+          <button className="pill grind" onClick={onGrind} aria-label="Auto-grind: let Lockstep level up your lead">
+            Grind
+          </button>
+        )}
         <button className="pill" onClick={onMenu} aria-label="Open run panel">
           Run
         </button>

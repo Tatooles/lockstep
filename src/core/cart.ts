@@ -121,6 +121,11 @@ export class Cartridge {
     if (this.ram.length > 0 && this.ramOffset >= this.ram.length) this.ramOffset %= this.ram.length;
   }
 
+  /** The ROM bank currently mapped at 0x4000-0x7FFF. */
+  get currentRomBank(): number {
+    return this.romBankOffset / 0x4000;
+  }
+
   readRom(addr: number): number {
     if (addr < 0x4000) return this.rom[this.romBank0Offset + addr];
     return this.rom[this.romBankOffset + (addr - 0x4000)];
