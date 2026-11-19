@@ -7,57 +7,17 @@ import { basename, join, relative } from 'node:path';
 import { PNG } from 'pngjs';
 import { GameBoy } from '../src/core/gameboy.ts';
 import { CLOCK_HZ, SCREEN_H, SCREEN_W } from '../src/core/constants.ts';
-import { WasmGameBoy } from '../wasm-core/gameboy-wasm.ts';
+import type { WasmGameBoy } from '../src/core/wasm.ts';
+import { wasmGameBoy } from './wasm-node.ts';
 
 const ROOT = join(import.meta.dirname, '..', 'test-roms');
 const OUT = join(import.meta.dirname, 'out');
 const useWasm = process.argv.includes('--wasm');
 const filter = process.argv.slice(2).find((a) => !a.startsWith('--')) ?? '';
 
-/** The slice of an emulator core this runner needs, so both cores can be tested. */
-interface Core {
-  frame: Uint8Array;
-  runFrame(): void;
-  step(): void;
-  peek(addr: number): number;
-  mcycles(): number;
-  halted(): boolean;
-  pc(): number;
-  regs(): number[];
-  onSerial(fn: (b: number) => void): void;
-}
-
-function makeCore(rom: Uint8Array): Core {
-  if (useWasm) {
-    const w = new WasmGameBoy(rom);
-    w.outputEnabled = false;
-    return {
-      frame: w.frame,
-      runFrame: () => w.runFrame(),
-      step: () => w.step(),
-      peek: (a) => w.peek(a),
-      mcycles: () => w.mcycles,
-      halted: () => w.reg(10) === 1,
-      pc: () => w.reg(9),
-      regs: () => [2, 3, 4, 5, 6, 7].map((i) => w.reg(i)),
-      onSerial: (fn) => (w.onSerial = fn),
-    };
-  }
-  const gb = new GameBoy(rom);
-  gb.apu.outputEnabled = false;
-  const c = gb.cpu;
-  return {
-    frame: gb.ppu.frame,
-    runFrame: () => gb.runFrame(),
-    step: () => c.step(),
-    peek: (a) => gb.peek(a),
-    mcycles: () => gb.bus.mcycles,
-    halted: () => c.halted,
-    pc: () => c.pc,
-    regs: () => [c.b, c.c, c.d, c.e, c.h, c.l],
-    onSerial: (fn) => (gb.bus.onSerialByte = fn),
-  };
-}
+/** Either core: both expose the members this runner uses. */
+type Core = GameBoy | WasmGameBoy;
+const makeCore = (rom: Uint8Array): Core => (useWasm ? wasmGameBoy(rom) : new GameBoy(rom));
 const SHADES = [0xff, 0xaa, 0x55, 0x00];
 
 interface Result {
@@ -69,7 +29,7 @@ interface Result {
 
 function framePng(gb: Core): PNG {
   const png = new PNG({ width: SCREEN_W, height: SCREEN_H });
-  const f = gb.frame;
+  const f = gb.ppu.frame;
   for (let i = 0; i < f.length; i++) {
     const s = SHADES[f[i]];
     png.data[i * 4] = s;
@@ -81,7 +41,7 @@ function framePng(gb: Core): PNG {
 }
 
 function matches(gb: Core, expected: PNG): number {
-  const f = gb.frame;
+  const f = gb.ppu.frame;
   let diff = 0;
   for (let i = 0; i < f.length; i++) {
     if (SHADES[f[i]] !== expected.data[i * 4]) diff++;
@@ -99,9 +59,10 @@ function screenshotTest(rom: string, png: string, seconds: number): Result {
   const t0 = performance.now();
   const gb = makeCore(new Uint8Array(readFileSync(rom)));
   let serial = '';
-  gb.onSerial((b) => {
+  gb.bus.onSerialByte = (b) => {
     serial += String.fromCharCode(b);
-  });
+  };
+  gb.apu.outputEnabled = false;
   const expected = PNG.sync.read(readFileSync(png));
   const frames = Math.ceil(seconds * 59.7275);
   let diff = -1;
@@ -124,16 +85,18 @@ function mooneyeTest(rom: string): Result {
   const name = relative(ROOT, rom);
   const t0 = performance.now();
   const gb = makeCore(new Uint8Array(readFileSync(rom)));
-  const limit = gb.mcycles() + (CLOCK_HZ / 4) * 20;
+  gb.apu.outputEnabled = false;
+  const cpu = gb.cpu;
+  const limit = gb.bus.mcycles + (CLOCK_HZ / 4) * 20;
   let done = false;
-  while (gb.mcycles() < limit) {
-    if (!gb.halted() && gb.peek(gb.pc()) === 0x40) {
+  while (gb.bus.mcycles < limit) {
+    if (!cpu.halted && gb.peek(cpu.pc) === 0x40) {
       done = true;
       break;
     }
-    gb.step();
+    cpu.step();
   }
-  const regs = gb.regs();
+  const regs = [cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l];
   const pass = done && regs.join() === '3,5,8,13,21,34';
   if (!pass) saveFailure(name, gb);
   return {

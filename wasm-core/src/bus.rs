@@ -3,6 +3,7 @@
 use crate::apu::Apu;
 use crate::cart::Cart;
 use crate::ppu::Ppu;
+use crate::state::State;
 use crate::timer::Timer;
 use crate::{INT_JOYPAD, INT_SERIAL};
 
@@ -51,6 +52,36 @@ impl Bus {
             dma_index: 0,
             dma_delay: 0,
         }
+    }
+
+    pub fn save(&self, s: &mut State) {
+        s.put(self.ie as f64);
+        s.put(self.iflag as f64);
+        s.put(self.p1_select as f64);
+        s.put(self.sb as f64);
+        s.put(self.sc as f64);
+        s.put(self.serial_cycles as f64);
+        s.put(self.dma_reg as f64);
+        s.flag(self.dma_active);
+        s.put(self.dma_src as f64);
+        s.put(self.dma_index as f64);
+        s.put(self.dma_delay as f64);
+        s.put(self.mcycles as f64);
+    }
+
+    pub fn load(&mut self, s: &mut State) {
+        self.ie = s.get() as u8;
+        self.iflag = s.get() as u8;
+        self.p1_select = s.get() as u8;
+        self.sb = s.get() as u8;
+        self.sc = s.get() as u8;
+        self.serial_cycles = s.get() as u32;
+        self.dma_reg = s.get() as u8;
+        self.dma_active = s.is();
+        self.dma_src = s.get() as usize;
+        self.dma_index = s.get() as usize;
+        self.dma_delay = s.get() as u8;
+        self.mcycles = s.get() as u64;
     }
 
     /// Advance every component by one M-cycle.

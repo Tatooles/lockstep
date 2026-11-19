@@ -3,7 +3,7 @@
 
 import { readFileSync } from 'node:fs';
 import { GameBoy } from '../src/core/gameboy.ts';
-import { WasmGameBoy } from '../wasm-core/gameboy-wasm.ts';
+import { wasmGameBoy } from './wasm-node.ts';
 
 const romPath = process.argv[2] ?? 'roms/pokered.gb';
 const rom = new Uint8Array(readFileSync(romPath));
@@ -22,9 +22,9 @@ function makeTs(audio: boolean): Runner {
 }
 
 function makeWasm(audio: boolean): Runner {
-  const gb = new WasmGameBoy(rom.slice());
-  gb.outputEnabled = audio;
-  return { runFrame: () => gb.runFrame(), drain: () => gb.drainAudio() };
+  const gb = wasmGameBoy(rom.slice());
+  gb.apu.outputEnabled = audio;
+  return { runFrame: () => gb.runFrame(), drain: () => gb.apu.clearBuffer() };
 }
 
 function trial(r: Runner): number {

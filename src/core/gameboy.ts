@@ -1,24 +1,12 @@
 import { Bus } from './bus.ts';
-import { Cartridge, type CartState } from './cart.ts';
+import { Cartridge } from './cart.ts';
 import { CYCLES_PER_FRAME } from './constants.ts';
 import { Cpu } from './cpu.ts';
-import type { PpuState } from './ppu.ts';
+import { checkState, STATE_VERSION, type Emulator, type SaveState } from './emulator.ts';
 
-export const STATE_VERSION = 1;
+export { STATE_VERSION, type SaveState } from './emulator.ts';
 
-export interface SaveState {
-  version: number;
-  title: string;
-  globalChecksum: number;
-  cpu: number[];
-  bus: { wram: Uint8Array; hram: Uint8Array; regs: number[] };
-  ppu: PpuState;
-  apu: { regs: Uint8Array; wave: Uint8Array; power: boolean };
-  timer: number[];
-  cart: CartState;
-}
-
-export class GameBoy {
+export class GameBoy implements Emulator {
   readonly cart: Cartridge;
   readonly bus: Bus;
   readonly cpu: Cpu;
@@ -97,9 +85,14 @@ export class GameBoy {
     };
   }
 
+  reset(): void {
+    const fresh = new GameBoy(this.cart.rom);
+    fresh.cart.ram.set(this.cart.ram);
+    this.loadState(fresh.saveState());
+  }
+
   loadState(s: SaveState): void {
-    if (s.version !== STATE_VERSION) throw new Error('Incompatible save state version');
-    if (s.globalChecksum !== this.cart.header.globalChecksum) throw new Error('Save state is for a different ROM');
+    checkState(s, this.cart.header);
     this.cpu.loadState(s.cpu);
     this.bus.loadState(s.bus);
     this.bus.ppu.loadState(s.ppu);

@@ -1,5 +1,6 @@
 // DIV/TIMA timer: a port of src/core/timer.ts.
 
+use crate::state::State;
 use crate::INT_TIMER;
 
 const TAC_BITS: [u16; 4] = [1 << 9, 1 << 3, 1 << 5, 1 << 7];
@@ -46,6 +47,24 @@ impl Timer {
 
     fn signal(&self) -> bool {
         self.tac & 4 != 0 && self.counter & TAC_BITS[(self.tac & 3) as usize] != 0
+    }
+
+    pub fn save(&self, s: &mut State) {
+        s.put(self.counter as f64);
+        s.put(self.tima as f64);
+        s.put(self.tma as f64);
+        s.put(self.tac as f64);
+        s.flag(self.reload_pending);
+        s.flag(self.reloading);
+    }
+
+    pub fn load(&mut self, s: &mut State) {
+        self.counter = s.get() as u16;
+        self.tima = s.get() as u8;
+        self.tma = s.get() as u8;
+        self.tac = s.get() as u8;
+        self.reload_pending = s.is();
+        self.reloading = s.is();
     }
 
     pub fn read(&self, addr: u16) -> u8 {

@@ -1,6 +1,7 @@
 // Sharp SM83 CPU: a port of src/core/cpu.ts (M-cycle accurate).
 
 use crate::bus::Bus;
+use crate::state::State;
 
 const FZ: u8 = 0x80;
 const FN: u8 = 0x40;
@@ -38,6 +39,37 @@ impl Cpu {
             sp: 0xfffe, pc: 0x0100, ime: false, halted: false, locked: false,
             halt_bug: false, ei_pending: false, bus,
         }
+    }
+
+    pub fn save(&self, s: &mut State) {
+        for r in [self.a, self.f, self.b, self.c, self.d, self.e, self.h, self.l] {
+            s.put(r as f64);
+        }
+        s.put(self.sp as f64);
+        s.put(self.pc as f64);
+        s.flag(self.ime);
+        s.flag(self.halted);
+        s.flag(self.halt_bug);
+        s.flag(self.ei_pending);
+        s.flag(self.locked);
+    }
+
+    pub fn load(&mut self, s: &mut State) {
+        self.a = s.get() as u8;
+        self.f = s.get() as u8;
+        self.b = s.get() as u8;
+        self.c = s.get() as u8;
+        self.d = s.get() as u8;
+        self.e = s.get() as u8;
+        self.h = s.get() as u8;
+        self.l = s.get() as u8;
+        self.sp = s.get() as u16;
+        self.pc = s.get() as u16;
+        self.ime = s.is();
+        self.halted = s.is();
+        self.halt_bug = s.is();
+        self.ei_pending = s.is();
+        self.locked = s.is();
     }
 
     #[inline(always)]

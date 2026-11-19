@@ -353,6 +353,31 @@ impl Apu {
         a
     }
 
+    /// Registers, wave RAM and power, as Apu.saveState in the TypeScript core.
+    pub fn save(&self, regs: &mut [u8; 0x30], wave: &mut [u8; 16]) -> bool {
+        *regs = self.regs;
+        *wave = self.ch3.ram;
+        self.power
+    }
+
+    /// Replays NR10-NR51 with trigger bits cleared, as Apu.loadState does.
+    pub fn load(&mut self, regs: &[u8; 0x30], wave: &[u8; 16], power: bool) {
+        self.power = true;
+        for i in 0..0x16usize {
+            let a = 0xff10 + i as u16;
+            let v = if matches!(a, 0xff14 | 0xff19 | 0xff1e | 0xff23) { regs[i] & 0x7f } else { regs[i] };
+            self.write(a, v);
+        }
+        self.ch3.ram = *wave;
+        if !power {
+            self.write(0xff26, 0);
+        }
+    }
+
+    pub fn clear_buffer(&mut self) {
+        self.read_pos = self.write_pos;
+    }
+
     #[inline(always)]
     pub fn tick(&mut self) {
         if self.power {

@@ -8,7 +8,9 @@ import { join, resolve } from 'node:path';
 
 // esbuild comes in through Vite; resolve it from there rather than adding a dependency.
 const viteRequire = createRequire(createRequire(import.meta.url).resolve('vite'));
-const { build } = viteRequire('esbuild') as typeof import('esbuild');
+const { build } = viteRequire('esbuild') as {
+  build(o: { entryPoints: string[]; bundle: boolean; format: 'iife'; outfile: string; logLevel: 'error' }): Promise<unknown>;
+};
 
 const root = join(import.meta.dirname, '..');
 const out = join(import.meta.dirname, 'out', 'bench-jsc.js');
@@ -16,5 +18,5 @@ mkdirSync(join(import.meta.dirname, 'out'), { recursive: true });
 await build({ entryPoints: [join(import.meta.dirname, 'bench-jsc.ts')], bundle: true, format: 'iife', outfile: out, logLevel: 'error' });
 const jsc = '/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/jsc';
 const rom = resolve(process.argv[2] ?? join(root, 'roms/pokered.gb'));
-const wasm = join(root, 'wasm-core/target/wasm32-unknown-unknown/release/lockstep_core.wasm');
+const wasm = join(root, 'src/core/lockstep_core.wasm');
 execFileSync(jsc, [out, '--', rom, wasm], { stdio: 'inherit' });

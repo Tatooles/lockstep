@@ -3,7 +3,7 @@
 
 import { GameBoy } from '../src/core/gameboy.ts';
 
-declare function readFile(path: string, mode: 'binary'): Uint8Array;
+declare function readFile(path: string, mode: 'binary'): Uint8Array<ArrayBuffer>;
 declare function preciseTime(): number;
 declare function print(...a: unknown[]): void;
 // The jsc shell exposes its command-line arguments as a global named `arguments`.

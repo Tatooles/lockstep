@@ -1,5 +1,6 @@
 // DMG PPU: a port of src/core/ppu.ts.
 
+use crate::state::State;
 use crate::{INT_STAT, INT_VBLANK};
 
 pub const W: usize = 160;
@@ -60,6 +61,45 @@ impl Ppu {
             bg_idx: [0; W],
             sprite_buf: [0; 10],
         }
+    }
+
+    pub fn save(&self, s: &mut State) {
+        for v in [self.lcdc, self.stat, self.scy, self.scx] {
+            s.put(v as f64);
+        }
+        s.put(self.ly as f64);
+        s.put(self.lyc as f64);
+        for v in [self.bgp, self.obp0, self.obp1] {
+            s.put(v as f64);
+        }
+        s.put(self.wy as f64);
+        s.put(self.wx as f64);
+        s.put(self.mode as f64);
+        s.put(self.dot as f64);
+        s.put(self.mode3_len as f64);
+        s.flag(self.stat_line);
+        s.put(self.window_line as f64);
+        s.flag(self.wy_triggered);
+    }
+
+    pub fn load(&mut self, s: &mut State) {
+        self.lcdc = s.get() as u8;
+        self.stat = s.get() as u8;
+        self.scy = s.get() as u8;
+        self.scx = s.get() as u8;
+        self.ly = s.get() as i32;
+        self.lyc = s.get() as i32;
+        self.bgp = s.get() as u8;
+        self.obp0 = s.get() as u8;
+        self.obp1 = s.get() as u8;
+        self.wy = s.get() as i32;
+        self.wx = s.get() as i32;
+        self.mode = s.get() as u8;
+        self.dot = s.get() as i32;
+        self.mode3_len = s.get() as i32;
+        self.stat_line = s.is();
+        self.window_line = s.get() as i32;
+        self.wy_triggered = s.is();
     }
 
     #[inline(always)]

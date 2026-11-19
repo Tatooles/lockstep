@@ -1,5 +1,7 @@
 // Cartridge + MBC1/2/3/5: a port of src/core/cart.ts.
 
+use crate::state::State;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mbc {
     None,
@@ -74,6 +76,70 @@ impl Cart {
         };
         c.update_offsets();
         c
+    }
+
+    /// A placeholder used while the machine is rebuilt around the real cartridge.
+    pub fn empty() -> Self {
+        Cart {
+            rom: Box::new([]),
+            ram: Vec::new(),
+            ram_dirty: false,
+            mbc: Mbc::None,
+            rom_mask: 0,
+            ram_enabled: false,
+            rom_bank: 1,
+            bank2: 0,
+            mode: 0,
+            rom_bank0_offset: 0,
+            rom_bank_offset: 0x4000,
+            ram_offset: 0,
+            rtc_latched: [0; 5],
+            rtc_latch_prev: 0xff,
+            rtc_base: 0.0,
+            rtc_halted_at: 0.0,
+            rtc_halted: false,
+            rtc_carry: false,
+        }
+    }
+
+    /// The ROM bank currently mapped at 0x4000-0x7FFF.
+    pub fn current_rom_bank(&self) -> usize {
+        self.rom_bank_offset / 0x4000
+    }
+
+    pub fn save(&self, s: &mut State) {
+        s.flag(self.ram_enabled);
+        s.put(self.rom_bank as f64);
+        s.put(self.bank2 as f64);
+        s.put(self.mode as f64);
+        s.put(self.rtc_latch_prev as f64);
+        for v in self.rtc_latched {
+            s.put(v as f64);
+        }
+        s.put(self.rtc_base);
+        s.flag(self.rtc_halted);
+        s.put(self.rtc_halted_at);
+        s.flag(self.rtc_carry);
+    }
+
+    pub fn load(&mut self, s: &mut State, has_rtc: bool) {
+        self.ram_enabled = s.is();
+        self.rom_bank = s.get() as usize;
+        self.bank2 = s.get() as usize;
+        self.mode = s.get() as u8;
+        self.rtc_latch_prev = s.get() as u8;
+        if has_rtc {
+            for i in 0..5 {
+                self.rtc_latched[i] = s.get() as u8;
+            }
+            self.rtc_base = s.get();
+            self.rtc_halted = s.is();
+            self.rtc_halted_at = s.get();
+            self.rtc_carry = s.is();
+        } else {
+            s.skip(9);
+        }
+        self.update_offsets();
     }
 
     fn update_offsets(&mut self) {
