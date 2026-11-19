@@ -2,7 +2,7 @@
 
 import { MAPS } from '../gen1/maps.ts';
 import type { Gen1Data } from '../gen1/rom.ts';
-import { SCRIPTED_BATTLE_TYPES, type GameEvent, type MonData, type Snapshot } from '../gen1/watcher.ts';
+import { SCRIPTED_BATTLE_TYPES, hasPokeBalls, type GameEvent, type MonData, type Snapshot } from '../gen1/watcher.ts';
 import { DEFAULT_RULES, type Encounter, type Notice, type Rules, type Run, type TrackedMon } from './types.ts';
 
 const OAKS_LAB = 40;
@@ -107,6 +107,8 @@ export function applyEvent(run: Run, ev: GameEvent, ctx: EngineContext): Notice[
         run.trainerName = ev.snap.playerName;
       }
       run.badges = ev.snap.badges;
+      // A save that's already past the start (badges or several Pokémon) has had balls.
+      if (hasPokeBalls(ev.snap.bag) || ev.snap.badges > 0 || ev.snap.party.length + ev.snap.box.length > 1) run.hadBalls = true;
       // Adopt anything already owned that we don't know about.
       for (const m of [...ev.snap.party, ...ev.snap.box]) {
         if (!run.mons[m.key]) trackMon(run, m, 'Before tracking', ev.snap.mapId, 'baseline', now);
@@ -119,6 +121,11 @@ export function applyEvent(run: Run, ev: GameEvent, ctx: EngineContext): Notice[
       run.activeEncounterId = null;
       if (ev.enemy.ghost) {
         notices.push({ tone: 'info', title: 'Unidentified ghost', body: "Doesn't count as an encounter." });
+        break;
+      }
+      if (!run.hadBalls && hasPokeBalls(snap.bag)) run.hadBalls = true;
+      if (run.rules.waitForBalls && !run.hadBalls) {
+        notices.push({ tone: 'info', title: 'No Poké Balls yet', body: "Doesn't count. Encounters start once you have Poké Balls." });
         break;
       }
       const area = areaOf(ev.mapId, run.rules);
@@ -315,6 +322,12 @@ export function applyEvent(run: Run, ev: GameEvent, ctx: EngineContext): Notice[
 /** Keep tracked mons in sync with the live party/box (levels, evolutions, nicknames). */
 export function syncMons(run: Run, snap: Snapshot): void {
   if (!snap.valid) return;
+  if (!run.hadBalls && hasPokeBalls(snap.bag)) {
+    run.hadBalls = true;
+    if (run.rules.waitForBalls) {
+      run.timeline.push({ at: Date.now(), playSeconds: snap.playSeconds, kind: 'note', text: 'Got Poké Balls. Encounters count from here on' });
+    }
+  }
   const inParty = new Set(snap.party.map((m) => m.key));
   for (const m of [...snap.party, ...snap.box]) {
     const t = run.mons[m.key];

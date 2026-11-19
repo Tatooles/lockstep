@@ -262,6 +262,11 @@ export type GameEvent =
 /** Poké Balls may always be thrown; anything else used in battle counts as an item. */
 const BALLS = new Set([0x01, 0x02, 0x03, 0x04, 0x08]);
 
+/** Whether the bag holds any Poké, Great, Ultra or Master Ball. */
+export function hasPokeBalls(bag: Record<number, number>): boolean {
+  return [0x01, 0x02, 0x03, 0x04].some((id) => (bag[id] ?? 0) > 0);
+}
+
 /**
  * Stateful differ. Call `update(snapshot)` regularly; it returns events
  * describing what changed since the last valid snapshot.

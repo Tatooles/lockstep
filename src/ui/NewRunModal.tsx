@@ -31,7 +31,7 @@ export function NewRunModal({ session, onClose }: { session: Session; onClose: (
     onClose();
   };
 
-  const Row = ({ k, label: l, hint }: { k: 'dupesClause' | 'giftsCount' | 'levelCaps' | 'forceSetMode' | 'noSaveStates' | 'noBattleItems'; label: string; hint: string }) => (
+  const Row = ({ k, label: l, hint }: { k: 'dupesClause' | 'giftsCount' | 'waitForBalls' | 'levelCaps' | 'forceSetMode' | 'noSaveStates' | 'noBattleItems'; label: string; hint: string }) => (
     <label className="field">
       <span>
         <span className="lbl">{l}</span>
@@ -55,6 +55,7 @@ export function NewRunModal({ session, onClose }: { session: Session; onClose: (
         <input id="run-name" type="text" value={name} onChange={(e) => setName(e.target.value)} maxLength={40} />
         <Row k="dupesClause" label="Dupes clause" hint="Skip first encounters you already own the evolution line of." />
         <Row k="giftsCount" label="Gifts use the area" hint="Gift Pokémon count as that area's encounter." />
+        <Row k="waitForBalls" label="Wait for Poké Balls" hint="Wild battles only count once you've had Poké Balls." />
         <Row k="levelCaps" label="Level caps" hint="Warn when you're above the next leader's strongest Pokémon." />
         <Row k="forceSetMode" label="Force Set battle style" hint="No free switch after knocking out a foe." />
         <Row k="noBattleItems" label="No items in battle" hint="Flag healing items used mid-battle. Poké Balls are fine." />

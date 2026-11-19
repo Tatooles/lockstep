@@ -4,6 +4,7 @@ import type { Gen1Data } from '../gen1/rom.ts';
 import { TYPE_COLORS, typeName } from '../gen1/types.ts';
 import type { BattleMonData, EnemyData, MonData } from '../gen1/watcher.ts';
 import { calcDamage, threatOf, type Combatant, type Threat } from '../gen1/damage.ts';
+import { levelProgress } from '../gen1/exp.ts';
 import { areaOf, usedAreas } from '../run/engine.ts';
 import type { Encounter, Run, TrackedMon } from '../run/types.ts';
 import { PALETTES, paletteById } from '../platform/palettes.ts';
@@ -328,6 +329,7 @@ function RouteTab({ data, view, session, onStartRun }: { data: Gen1Data; view: S
             <div className="small">
               {info.state === 'open' && 'The first wild Pokémon you meet here is the only one you can catch.'}
               {info.state === 'none' && 'Nothing to catch in this area.'}
+              {info.state === 'noballs' && "Wild battles before then don't use up an area."}
               {info.state === 'caught' && info.encounter && `Level ${info.encounter.level}.`}
               {info.state === 'failed' && 'This area is used up.'}
               {info.state === 'pending' && 'Weaken it, then throw a ball.'}
@@ -453,6 +455,8 @@ function EncounterList({ data, run, session }: { data: Gen1Data; run: Run; sessi
 // ---------------- Team ----------------
 function MonCard({ data, m, tracked }: { data: Gen1Data; m: MonData; tracked?: TrackedMon }) {
   const dead = tracked?.status === 'dead';
+  const growth = data.species.get(m.species)?.growth;
+  const xp = growth === undefined ? null : levelProgress(growth, m.level, m.exp);
   return (
     <article className={`mon-card${dead ? ' dead' : ''}`}>
       <header>
@@ -472,14 +476,26 @@ function MonCard({ data, m, tracked }: { data: Gen1Data; m: MonData; tracked?: T
           <small>level</small>
         </div>
       </header>
-      {m.maxHp > 0 && (
-        <div className="hpline">
-          <span className={`hp ${hpClass(m.hp, m.maxHp)}`}>
-            <i style={{ width: `${(100 * m.hp) / m.maxHp}%` }} />
-          </span>
-          <span>
-            {m.hp}/{m.maxHp} HP
-          </span>
+      {(m.maxHp > 0 || growth !== undefined) && (
+        <div className="bars">
+          {m.maxHp > 0 && (
+            <>
+              <span className={`hp ${hpClass(m.hp, m.maxHp)}`}>
+                <i style={{ width: `${(100 * m.hp) / m.maxHp}%` }} />
+              </span>
+              <span>
+                {m.hp}/{m.maxHp} HP
+              </span>
+            </>
+          )}
+          {growth !== undefined && (
+            <>
+              <span className="xp" role="progressbar" aria-label="Experience" aria-valuenow={xp ? Math.round((100 * xp.into) / xp.span) : 100} aria-valuemin={0} aria-valuemax={100}>
+                <i style={{ width: `${xp ? (100 * xp.into) / xp.span : 100}%` }} />
+              </span>
+              <span>{xp ? `${xp.toNext.toLocaleString()} XP to Lv ${m.level + 1}` : 'Max level'}</span>
+            </>
+          )}
         </div>
       )}
       {dead && <div className="outcome dead" style={{ justifySelf: 'start' }}>Dead: {tracked?.death?.cause}</div>}
@@ -721,6 +737,7 @@ function RunTab({ session, view, onStartRun, onExit }: { session: Session; view:
           <Toggle label="Gifts use the area" hint="Eevee, Lapras, fossils and other gifts count as that area's encounter." checked={run.rules.giftsCount} onChange={(v) => setRule('giftsCount', v)} />
           <Toggle label="Level caps" hint="Warn when your team is above the next leader's strongest Pokémon." checked={run.rules.levelCaps} onChange={(v) => setRule('levelCaps', v)} />
           <Toggle label="Force Set battle style" hint="No free switch after knocking out a foe." checked={run.rules.forceSetMode} onChange={(v) => setRule('forceSetMode', v)} />
+          <Toggle label="Wait for Poké Balls" hint="Wild battles only count as encounters once you've had Poké Balls." checked={run.rules.waitForBalls} onChange={(v) => setRule('waitForBalls', v)} />
           <Toggle label="No items in battle" hint="Flag healing and other items used mid-battle. Poké Balls are fine." checked={!!run.rules.noBattleItems} onChange={(v) => setRule('noBattleItems', v)} />
           <Toggle label="No save states" hint="Hardcore: only the in-game save. Resuming after closing the app still works." checked={run.rules.noSaveStates} onChange={(v) => setRule('noSaveStates', v)} />
           <div className="field">

@@ -13,6 +13,8 @@ export interface Rules {
   forceSetMode: boolean;
   /** Flag items (other than Poké Balls) used during battles. */
   noBattleItems: boolean;
+  /** Wild battles only count as encounters once the player has had Poké Balls. */
+  waitForBalls: boolean;
 }
 
 export const DEFAULT_RULES: Rules = {
@@ -23,6 +25,7 @@ export const DEFAULT_RULES: Rules = {
   noSaveStates: false,
   forceSetMode: false,
   noBattleItems: false,
+  waitForBalls: true,
 };
 
 export type EncounterKind = 'wild' | 'gift' | 'starter' | 'trade';
@@ -100,6 +103,8 @@ export interface Run {
   badges: number;
   trainerId: number | null;
   trainerName: string | null;
+  /** Set once the player has held Poké Balls; encounters count from then on. */
+  hadBalls?: boolean;
 }
 
 export interface Notice {

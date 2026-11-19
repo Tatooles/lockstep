@@ -68,6 +68,10 @@ class FakeGame implements Ram {
   endBattle(): void {
     this.mem[S.wIsInBattle] = 0;
   }
+  giveBalls(n = 5): void {
+    this.mem[S.wNumBagItems] = 1;
+    this.w(S.wBagItems, [0x04, n, 0xff]);
+  }
   /** Put party slot `slot` on the field (wPlayerMonNumber + wBattleMon). */
   sendOut(slot: number): void {
     const b = S.wPartyMons + slot * 44;
@@ -122,6 +126,7 @@ describe('nuzlocke engine', () => {
     expect(Object.values(run.mons)[0].origin).toBe('starter');
 
     // Route 1: first encounter Pidgey, caught.
+    game.giveBalls();
     game.mem[S.wCurMap] = ROUTE_1;
     step();
     game.startWild(PIDGEY, 3, 0x1111);
@@ -186,11 +191,39 @@ describe('nuzlocke engine', () => {
     expect(notices.at(-1)?.title).toBe('Rule check: dead Pokémon used');
   });
 
+  it('ignores wild battles until the player has had Poké Balls', () => {
+    const { game, run, notices, step } = harness();
+    step();
+    game.addParty(BULBASAUR, 5, 0xabcd, 'BULBASAUR');
+    step();
+    game.mem[S.wCurMap] = ROUTE_1;
+    game.startWild(PIDGEY, 3, 0x1111);
+    step();
+    step();
+    game.endBattle();
+    step();
+    expect(run.encounters.filter((e) => e.kind === 'wild')).toHaveLength(0);
+    expect(notices.at(-1)?.title).toBe('No Poké Balls yet');
+    expect(usedAreas(run).has('Route 1')).toBe(false);
+
+    // Balls in the bag: the next battle counts, and it keeps counting after they run out.
+    game.giveBalls();
+    step();
+    expect(run.hadBalls).toBe(true);
+    game.mem[S.wNumBagItems] = 0;
+    game.w(S.wBagItems, [0xff]);
+    game.startWild(RATTATA, 3, 0x2222);
+    step();
+    step();
+    expect(run.encounters.at(-1)).toMatchObject({ area: 'Route 1', species: RATTATA, outcome: 'pending' });
+  });
+
   it('defers wild battle start until enemy data is loaded', () => {
     const { game, run, step } = harness();
     step();
     game.addParty(BULBASAUR, 5, 0xabcd, 'BULBASAUR');
     step();
+    game.giveBalls();
     game.mem[S.wCurMap] = ROUTE_1;
     step();
     // Stale enemy from a previous battle, flag set before data loads.
@@ -207,6 +240,7 @@ describe('nuzlocke engine', () => {
     step();
     game.addParty(BULBASAUR, 5, 0xabcd, 'BULBASAUR');
     step();
+    game.giveBalls();
     game.mem[S.wCurMap] = 145; // Pokemon Tower 4F
     game.startWild(PIDGEY, 20, 0x7777);
     step();

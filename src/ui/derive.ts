@@ -4,7 +4,7 @@ import { areaOf, ownedFamilies, usedAreas } from '../run/engine.ts';
 import type { Encounter, Run } from '../run/types.ts';
 import type { Snapshot } from '../gen1/watcher.ts';
 
-export type RouteState = 'untracked' | 'none' | 'open' | 'pending' | 'caught' | 'failed' | 'loading';
+export type RouteState = 'untracked' | 'none' | 'noballs' | 'open' | 'pending' | 'caught' | 'failed' | 'loading';
 
 export interface RouteInfo {
   state: RouteState;
@@ -28,7 +28,9 @@ export function routeInfo(data: Gen1Data | null, run: Run | null, snap: Snapshot
   }
   // Areas with grouped maps: wild data may live on another floor.
   const anyWild = hasWild || MAPS.some((m) => areaOf(m.id, run.rules) === area && !!data?.wild(m.id));
-  return { state: anyWild ? 'open' : 'none', area, mapName, encounter: null, hasWild };
+  if (!anyWild) return { state: 'none', area, mapName, encounter: null, hasWild };
+  if (run.rules.waitForBalls && !run.hadBalls) return { state: 'noballs', area, mapName, encounter: null, hasWild };
+  return { state: 'open', area, mapName, encounter: null, hasWild };
 }
 
 export function routeLine(info: RouteInfo, data: Gen1Data | null): string {
@@ -40,6 +42,8 @@ export function routeLine(info: RouteInfo, data: Gen1Data | null): string {
       return 'Not tracking. Tap to start a run';
     case 'none':
       return 'No wild Pokémon here';
+    case 'noballs':
+      return 'Encounters start once you have Poké Balls';
     case 'open':
       return 'First encounter available';
     case 'pending':

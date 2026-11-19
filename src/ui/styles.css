@@ -15,6 +15,7 @@
   --key-ink: #ece6f3;
   --open: #1f7a6e;
   --open-bg: #cfe9e2;
+  --xp: #3b63c4;
   --caught: #9a6c12;
   --caught-bg: #f1e2bd;
   --dead: #b03b26;
@@ -46,6 +47,7 @@
     --key-ink: #ece6f3;
     --open: #5cc8b3;
     --open-bg: #183a35;
+    --xp: #86a8f5;
     --caught: #e2b75e;
     --caught-bg: #3c2f15;
     --dead: #f08368;
@@ -70,6 +72,7 @@
   --bezel: #0f0c16;
   --open: #5cc8b3;
   --open-bg: #183a35;
+  --xp: #86a8f5;
   --caught: #e2b75e;
   --caught-bg: #3c2f15;
   --dead: #f08368;
@@ -1038,10 +1041,10 @@ select.outcome {
 .mon-card.dead {
   opacity: 0.7;
 }
-.mon-card .hpline {
+.mon-card .bars {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 8px;
+  gap: 6px 10px;
   align-items: center;
   font-size: 12.5px;
   color: var(--ink-soft);
@@ -1613,4 +1616,28 @@ select.outcome {
   font-size: 13px;
   color: var(--ink-faint);
   margin-top: 8px;
+}
+
+/* Experience bar (team cards) */
+.mon-card .xp {
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+.mon-card .xp i {
+  display: block;
+  height: 100%;
+  background: var(--xp);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .mon-card .xp i {
+    transition: none;
+  }
+}
+.mon-card .bars > span:nth-child(even) {
+  text-align: right;
 }
