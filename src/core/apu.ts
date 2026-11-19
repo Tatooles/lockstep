@@ -530,7 +530,8 @@ export class Apu {
 
   loadState(s: { regs: Uint8Array; wave: Uint8Array; power: boolean }): void {
     this.power = true;
-    for (let i = 0; i < 0x17; i++) {
+    // NR10-NR51 only: replaying NR52 (index 0x16, never stored) would write 0 and power the APU off.
+    for (let i = 0; i < 0x16; i++) {
       const a = 0xff10 + i;
       if (a === 0xff14 || a === 0xff19 || a === 0xff1e || a === 0xff23) {
         this.write(a, s.regs[i] & 0x7f);
