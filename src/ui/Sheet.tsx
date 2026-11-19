@@ -828,7 +828,6 @@ function RunTab({ session, view, onStartRun, onExit }: { session: Session; view:
         <input
           ref={fileRef}
           type="file"
-          accept=".sav,.srm,application/octet-stream"
           className="sr-only"
           onChange={async (e) => {
             const f = e.target.files?.[0];

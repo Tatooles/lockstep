@@ -102,7 +102,7 @@ export function Library({ onOpen, opening, error }: { onOpen: (r: RomRecord) => 
       >
         <strong>{opening ? 'Opening…' : 'Load a ROM'}</strong>
         <small>Pick a .gb file you dumped from your own cartridge. It stays on this device and is never uploaded.</small>
-        <input ref={input} type="file" accept=".gb,.gbc,application/octet-stream" className="sr-only" onChange={onPick} />
+        <input ref={input} type="file" className="sr-only" onChange={onPick} />
       </label>
       {(msg || error) && <div className="error">{msg ?? error}</div>}
 
