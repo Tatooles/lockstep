@@ -1,9 +1,3 @@
-export const INT_VBLANK = 1;
-export const INT_STAT = 2;
-export const INT_TIMER = 4;
-export const INT_SERIAL = 8;
-export const INT_JOYPAD = 16;
-
 export const SCREEN_W = 160;
 export const SCREEN_H = 144;
 /** T-cycles per frame. */

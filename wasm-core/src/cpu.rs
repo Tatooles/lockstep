@@ -1,4 +1,4 @@
-// Sharp SM83 CPU: a port of src/core/cpu.ts (M-cycle accurate).
+// Sharp SM83 CPU (M-cycle accurate).
 
 use crate::bus::Bus;
 use crate::state::State;

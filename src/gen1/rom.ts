@@ -1,7 +1,7 @@
 // Reads game data (species, moves, types, wild encounters, trainers) straight
 // out of the player's own ROM using disassembly symbol offsets.
 
-import { parseHeader } from '../core/cart.ts';
+import { parseHeader } from '../core/header.ts';
 import { SYMBOLS, type Gen1Symbols } from './symbols.ts';
 import { decodeText, decodeTextLen, prettyName } from './text.ts';
 

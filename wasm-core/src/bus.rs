@@ -1,4 +1,4 @@
-// Memory bus: a port of src/core/bus.ts.
+// Memory bus: address decoding, IO registers, OAM DMA, joypad and serial.
 
 use crate::apu::Apu;
 use crate::cart::Cart;

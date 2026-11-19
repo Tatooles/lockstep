@@ -2,8 +2,8 @@
 
 import { Grinder, type GrindEnd, type GrindProgress } from '../bot/grinder.ts';
 import { FRAME_RATE, SCREEN_H, SCREEN_W } from '../core/constants.ts';
-import { createEmulator } from '../core/create.ts';
-import type { CoreKind, Emulator } from '../core/emulator.ts';
+import type { GameBoy } from '../core/gameboy.ts';
+import { createGameBoy } from '../core/load.ts';
 import { nextMilestone, readMilestones, type Milestone } from '../gen1/milestones.ts';
 import { detectVersion, Gen1Data } from '../gen1/rom.ts';
 import { SYMBOLS } from '../gen1/symbols.ts';
@@ -36,8 +36,6 @@ export interface SessionView {
   grind: GrindProgress | null;
   /** Why the last auto-grind stopped, until dismissed. */
   grindEnd: (GrindEnd & { summary: string }) | null;
-  /** Which emulator core is running. */
-  core: CoreKind;
   /** Average milliseconds of emulation per Game Boy frame (last second), or null before a sample. */
   emuMs: number | null;
   rev: number;
@@ -54,8 +52,7 @@ const TRACK_EVERY = 4;
 const GRIND_BUDGET_MS = 12;
 
 export class Session {
-  private emu: Emulator;
-  private coreKind: CoreKind;
+  readonly gb: GameBoy;
   readonly rom: RomRecord;
   readonly data: Gen1Data | null;
   readonly milestones: Milestone[];
@@ -108,25 +105,26 @@ export class Session {
   private onHide = () => this.handleHide();
   private onVis = () => (document.visibilityState === 'hidden' ? this.handleHide() : this.handleShow());
 
-  private constructor(rom: RomRecord, sram: Uint8Array | undefined, gb: Emulator, core: CoreKind) {
+  private constructor(rom: RomRecord, sram: Uint8Array | undefined, gb: GameBoy) {
     this.rom = rom;
-    this.emu = gb;
-    this.coreKind = core;
+    this.gb = gb;
     if (sram && sram.length === this.gb.cart.ram.length) this.gb.cart.ram.set(sram);
     const version = detectVersion(rom.data);
     this.data = version ? new Gen1Data(rom.data, version) : null;
     this.milestones = this.data ? readMilestones(this.data) : [];
     this.reader = version ? new Gen1Reader(SYMBOLS[version]) : null;
-    this.ram = this.bindRam();
+    const wram = this.gb.bus.wram;
+    const bus = this.gb.bus;
+    // Work RAM reads straight from the array; everything else through the bus.
+    this.ram = { u8: (a: number) => (a >= 0xc000 && a < 0xe000 ? wram[a - 0xc000] : bus.read(a)) };
     this.view = this.buildView();
     document.addEventListener('visibilitychange', this.onVis);
     window.addEventListener('pagehide', this.onHide);
   }
 
-  static async open(rom: RomRecord, core: CoreKind = 'wasm'): Promise<Session> {
+  static async open(rom: RomRecord): Promise<Session> {
     const sram = await db.getSram(rom.key);
-    const { gb, kind } = await createEmulator(rom.data, core);
-    const s = new Session(rom, sram, gb, kind);
+    const s = new Session(rom, sram, await createGameBoy(rom.data));
     const resume = await db.getState(rom.key, 'resume');
     if (resume) {
       try {
@@ -143,46 +141,6 @@ export class Session {
     await db.putRom({ ...rom, lastPlayedAt: Date.now() });
     s.start();
     return s;
-  }
-
-  /** The running emulator core. Changes if the core is switched. */
-  get gb(): Emulator {
-    return this.emu;
-  }
-
-  get core(): CoreKind {
-    return this.coreKind;
-  }
-
-  /** Work RAM reads straight from the array; everything else through the bus. */
-  private bindRam(): Ram {
-    const wram = this.gb.bus.wram;
-    const bus = this.gb.bus;
-    return { u8: (a: number) => (a >= 0xc000 && a < 0xe000 ? wram[a - 0xc000] : bus.read(a)) };
-  }
-
-  /**
-   * Swap emulator cores mid-game by carrying a save state across. The cores
-   * share a state format, so play continues from the same instant.
-   */
-  async switchCore(kind: CoreKind): Promise<CoreKind> {
-    if (kind === this.coreKind) return kind;
-    this.stopGrind();
-    const state = this.gb.saveState();
-    const dirty = this.gb.cart.ramDirty;
-    const { gb, kind: got } = await createEmulator(this.rom.data, kind);
-    if (this.destroyed) return this.coreKind;
-    gb.loadState(state);
-    gb.cart.ramDirty = dirty;
-    this.emu = gb;
-    this.coreKind = got;
-    this.ram = this.bindRam();
-    this.emuTime = this.emuFrames = 0;
-    this.emuMs = null;
-    this.audio.clear();
-    this.present();
-    this.publish();
-    return got;
   }
 
   /** Run one Game Boy frame, timing it for the emulation-cost readout. */
@@ -216,7 +174,6 @@ export class Session {
       version: this.data?.version ?? null,
       grind: this.grinder ? { ...this.grinder.getProgress() } : null,
       grindEnd: this.grindEnd,
-      core: this.coreKind,
       emuMs: this.emuMs,
       rev: this.rev,
     };

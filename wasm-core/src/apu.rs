@@ -1,4 +1,4 @@
-// DMG APU: a port of src/core/apu.ts. Float math matches the JS (f64, stored as f32).
+// DMG APU: four channels, mixed and resampled to the host's rate (f64 math, stored as f32).
 
 const DUTY: [[u8; 8]; 4] = [
     [0, 0, 0, 0, 0, 0, 0, 1],
@@ -353,7 +353,7 @@ impl Apu {
         a
     }
 
-    /// Registers, wave RAM and power, as Apu.saveState in the TypeScript core.
+    /// Registers, wave RAM and power, for save states.
     pub fn save(&self, regs: &mut [u8; 0x30], wave: &mut [u8; 16]) -> bool {
         *regs = self.regs;
         *wave = self.ch3.ram;

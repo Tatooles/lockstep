@@ -1,23 +1,17 @@
 // Headless conformance runner: blargg + dmg-acid2 (screenshot compare) and
 // mooneye (Fibonacci register signature on LD B,B).
-//   node tools/run-test-roms.ts [filter] [--wasm]
+//   node tools/run-test-roms.ts [filter]
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
 import { PNG } from 'pngjs';
-import { GameBoy } from '../src/core/gameboy.ts';
 import { CLOCK_HZ, SCREEN_H, SCREEN_W } from '../src/core/constants.ts';
-import type { WasmGameBoy } from '../src/core/wasm.ts';
-import { wasmGameBoy } from './wasm-node.ts';
+import type { GameBoy } from '../src/core/gameboy.ts';
+import { gameBoy } from './core.ts';
 
 const ROOT = join(import.meta.dirname, '..', 'test-roms');
 const OUT = join(import.meta.dirname, 'out');
-const useWasm = process.argv.includes('--wasm');
-const filter = process.argv.slice(2).find((a) => !a.startsWith('--')) ?? '';
-
-/** Either core: both expose the members this runner uses. */
-type Core = GameBoy | WasmGameBoy;
-const makeCore = (rom: Uint8Array): Core => (useWasm ? wasmGameBoy(rom) : new GameBoy(rom));
+const filter = process.argv[2] ?? '';
 const SHADES = [0xff, 0xaa, 0x55, 0x00];
 
 interface Result {
@@ -27,7 +21,7 @@ interface Result {
   ms: number;
 }
 
-function framePng(gb: Core): PNG {
+function framePng(gb: GameBoy): PNG {
   const png = new PNG({ width: SCREEN_W, height: SCREEN_H });
   const f = gb.ppu.frame;
   for (let i = 0; i < f.length; i++) {
@@ -40,7 +34,7 @@ function framePng(gb: Core): PNG {
   return png;
 }
 
-function matches(gb: Core, expected: PNG): number {
+function matches(gb: GameBoy, expected: PNG): number {
   const f = gb.ppu.frame;
   let diff = 0;
   for (let i = 0; i < f.length; i++) {
@@ -49,7 +43,7 @@ function matches(gb: Core, expected: PNG): number {
   return diff;
 }
 
-function saveFailure(name: string, gb: Core): void {
+function saveFailure(name: string, gb: GameBoy): void {
   mkdirSync(OUT, { recursive: true });
   writeFileSync(join(OUT, name.replace(/[\\/]/g, '__') + '.png'), PNG.sync.write(framePng(gb)));
 }
@@ -57,7 +51,7 @@ function saveFailure(name: string, gb: Core): void {
 function screenshotTest(rom: string, png: string, seconds: number): Result {
   const name = relative(ROOT, rom);
   const t0 = performance.now();
-  const gb = makeCore(new Uint8Array(readFileSync(rom)));
+  const gb = gameBoy(new Uint8Array(readFileSync(rom)));
   let serial = '';
   gb.bus.onSerialByte = (b) => {
     serial += String.fromCharCode(b);
@@ -84,7 +78,7 @@ function screenshotTest(rom: string, png: string, seconds: number): Result {
 function mooneyeTest(rom: string): Result {
   const name = relative(ROOT, rom);
   const t0 = performance.now();
-  const gb = makeCore(new Uint8Array(readFileSync(rom)));
+  const gb = gameBoy(new Uint8Array(readFileSync(rom)));
   gb.apu.outputEnabled = false;
   const cpu = gb.cpu;
   const limit = gb.bus.mcycles + (CLOCK_HZ / 4) * 20;
@@ -162,6 +156,6 @@ for (const d of mooneyeDirs) {
 const passed = results.filter((r) => r.pass).length;
 console.log(`\n${passed}/${results.length} passed`);
 writeFileSync(
-  join(import.meta.dirname, '..', useWasm ? 'test-results-wasm.json' : 'test-results.json'),
+  join(import.meta.dirname, '..', 'test-results.json'),
   JSON.stringify({ passed, total: results.length, results: results.map(({ name, pass, detail }) => ({ name, pass, detail })) }, null, 2),
 );

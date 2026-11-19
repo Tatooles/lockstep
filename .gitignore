@@ -10,4 +10,3 @@ roms
 tools/out
 test-results.json
 wasm-core/target
-test-results-wasm.json

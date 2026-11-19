@@ -846,26 +846,10 @@ function RunTab({ session, view, onStartRun, onExit }: { session: Session; view:
       <Toggle label="Vibrate on button press" hint="Android only; iPhone browsers don't allow it." checked={p.haptics} onChange={(v) => setPref({ haptics: v })} />
       <div className="field">
         <span>
-          <span className="lbl">Emulator core</span>
+          <span className="lbl">Emulator</span>
           <div className="hint">
-            {view.core === 'wasm' ? 'Rust, compiled to WebAssembly' : 'TypeScript'}
-            {view.emuMs != null && ` · ${view.emuMs.toFixed(2)} ms per frame`}. Switching keeps your place.
+            Rust, compiled to WebAssembly{view.emuMs != null && ` · ${view.emuMs.toFixed(2)} ms per frame`}
           </div>
-        </span>
-        <span className="seg">
-          {(['wasm', 'ts'] as const).map((k) => (
-            <button
-              key={k}
-              aria-pressed={view.core === k}
-              onClick={async () => {
-                setPref({ core: k });
-                const got = await session.switchCore(k);
-                if (got !== k) setMsg('WebAssembly is unavailable here, so the TypeScript core is still running.');
-              }}
-            >
-              {k === 'wasm' ? 'Rust' : 'TypeScript'}
-            </button>
-          ))}
         </span>
       </div>
 

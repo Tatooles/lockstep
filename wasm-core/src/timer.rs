@@ -1,4 +1,4 @@
-// DIV/TIMA timer: a port of src/core/timer.ts.
+// DIV/TIMA timer, including the falling-edge and TIMA reload quirks.
 
 use crate::state::State;
 use crate::INT_TIMER;

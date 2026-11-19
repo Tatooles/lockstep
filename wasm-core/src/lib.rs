@@ -1,6 +1,5 @@
-// Lockstep Game Boy core in Rust, compiled to Wasm. A line-for-line port of
-// src/core/*.ts, exposed through a small C ABI (no wasm-bindgen). The host
-// wrapper is src/core/wasm.ts.
+// Lockstep's Game Boy core in Rust, compiled to Wasm and exposed through a
+// small C ABI (no wasm-bindgen). The TypeScript wrapper is src/core/gameboy.ts.
 //
 // Memory is only allocated in `alloc` and `init`. After that nothing grows the
 // Wasm heap, so typed-array views the host takes over it stay valid.
@@ -45,7 +44,7 @@ pub(crate) fn serial(b: u8) {
 
 static mut GB: *mut Cpu = core::ptr::null_mut();
 
-/// Save-state numbers, in the order of the TypeScript SaveState arrays:
+/// Save-state numbers, in the order of the SaveState arrays in src/core/gameboy.ts:
 /// cpu[15], bus.regs[12], ppu.regs[17], timer[6], cart.regs[5], cart.rtc[9],
 /// then apu.power and "has rtc".
 const STATE_NUMS_LEN: usize = 66;

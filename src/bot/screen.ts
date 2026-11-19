@@ -5,7 +5,7 @@
 // (battle menu, move menu, a text box, …), so the bot always knows which screen
 // is up and where its cursor is, without guessing from pixels or timing.
 
-import type { Emulator } from '../core/emulator.ts';
+import type { GameBoy } from '../core/gameboy.ts';
 import type { Gen1Symbols } from '../gen1/symbols.ts';
 
 export type Screen =
@@ -35,7 +35,7 @@ export type Screen =
 type Range = [number, number, number];
 
 /** Routines on the call stack, innermost first, from the PC up to the overworld loop. */
-export function callChain(gb: Emulator, sym: Gen1Symbols): string[] {
+export function callChain(gb: GameBoy, sym: Gen1Symbols): string[] {
   const routines = Object.entries(sym.routines) as [string, Range][];
   const lookup = (bank: number, addr: number): string | null => {
     for (const [name, [b, start, end]] of routines) {
@@ -103,7 +103,7 @@ export function classify(chain: string[]): Screen {
  * code (often a helper reached by an inline bank switch the walk can't see)
  * the outer frames resolve against the wrong bank.
  */
-export function readScreen(gb: Emulator, sym: Gen1Symbols): Screen | null {
+export function readScreen(gb: GameBoy, sym: Gen1Symbols): Screen | null {
   if (gb.cpu.pc >= 0x4000 && gb.cpu.pc < 0x8000) return null;
   return classify(callChain(gb, sym));
 }

@@ -7,11 +7,9 @@ export interface Prefs {
   haptics: boolean;
   /** Keep a Repel active in Gen 1 games (wild Pokémon below the lead's level stay away). */
   repel: boolean;
-  /** Emulator core: Rust compiled to WebAssembly, or the original TypeScript. */
-  core: 'wasm' | 'ts';
 }
 
-const DEFAULTS: Prefs = { palette: 'dusk', theme: 'system', pauseOnSheet: true, haptics: true, repel: false, core: 'wasm' };
+const DEFAULTS: Prefs = { palette: 'dusk', theme: 'system', pauseOnSheet: true, haptics: true, repel: false };
 const KEY = 'lockstep:prefs';
 
 let current: Prefs = DEFAULTS;

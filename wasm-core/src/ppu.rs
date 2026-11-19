@@ -1,4 +1,4 @@
-// DMG PPU: a port of src/core/ppu.ts.
+// DMG PPU: scanline renderer with mode timing, STAT interrupts and the window line counter.
 
 use crate::state::State;
 use crate::{INT_STAT, INT_VBLANK};

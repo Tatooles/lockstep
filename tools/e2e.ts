@@ -93,26 +93,13 @@ try {
     await page.waitForTimeout(400);
     await page.screenshot({ path: join(OUT, `e2e-sheet-${vp.name}.png`) });
     if (vp.name === 'desktop') {
-      // The Rust/Wasm core runs by default, and switching cores mid-game keeps playing.
-      if (!(await page.locator('.field', { hasText: 'Emulator core' }).count())) {
+      // Settings shows the emulation cost per frame, measured live.
+      if (!(await page.locator('.field', { hasText: 'Emulator' }).count())) {
         await page.getByRole('tab', { name: /^(Run|Settings)$/ }).click();
       }
-      const field = page.locator('.field', { hasText: 'Emulator core' });
-      const hint = field.locator('.hint');
       await page.waitForTimeout(1200);
-      const first = (await hint.textContent()) ?? '';
-      check(first.includes('WebAssembly'), `desktop: Rust/Wasm core is running ("${first}")`);
-      check(/ms per frame/.test(first), 'desktop: emulation cost is measured');
-      for (const [button, expect] of [
-        ['TypeScript', 'TypeScript'],
-        ['Rust', 'WebAssembly'],
-      ] as const) {
-        await field.getByRole('button', { name: button }).click();
-        await page.waitForTimeout(1500);
-        const text = (await hint.textContent()) ?? '';
-        check(text.includes(expect), `desktop: switched to ${button} ("${text}")`);
-        check((await screenNonBlank(page)) > 1, `desktop: screen still renders after switching to ${button}`);
-      }
+      const hint = (await page.locator('.field', { hasText: 'Emulator' }).locator('.hint').textContent()) ?? '';
+      check(/WebAssembly · \d+\.\d\d ms per frame/.test(hint), `desktop: emulation cost is measured ("${hint}")`);
     }
     check(errors.length === 0, `${vp.name}: no console errors ${errors.join(' | ')}`);
     await ctx.close();

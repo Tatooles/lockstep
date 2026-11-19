@@ -1,5 +1,5 @@
 // Headless game driver for integration testing the tracker against a real ROM.
-//   node tools/play.ts <rom.gb> <script.txt | -e "commands"> [--state in.state] [--save out.state] [--wasm]
+//   node tools/play.ts <rom.gb> <script.txt | -e "commands"> [--state in.state] [--save out.state]
 //
 // Script commands (one per line or ';'-separated):
 //   wait N            run N frames
@@ -23,9 +23,8 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { PNG } from 'pngjs';
 import { Button } from '../src/core/constants.ts';
-import type { Emulator } from '../src/core/emulator.ts';
-import { GameBoy, type SaveState } from '../src/core/gameboy.ts';
-import { wasmGameBoy } from './wasm-node.ts';
+import type { SaveState } from '../src/core/gameboy.ts';
+import { gameBoy } from './core.ts';
 import { readMilestones, nextMilestone } from '../src/gen1/milestones.ts';
 import { detectVersion, Gen1Data } from '../src/gen1/rom.ts';
 import { SYMBOLS } from '../src/gen1/symbols.ts';
@@ -43,17 +42,15 @@ if (!romPath) throw new Error('usage: node tools/play.ts <rom> <script|-e cmds>'
 let script = '';
 let stateIn: string | null = null;
 let stateOut: string | null = null;
-let useWasm = false;
 for (let i = 1; i < args.length; i++) {
   if (args[i] === '-e') script = args[++i];
   else if (args[i] === '--state') stateIn = args[++i];
   else if (args[i] === '--save') stateOut = args[++i];
-  else if (args[i] === '--wasm') useWasm = true;
   else script = readFileSync(args[i], 'utf8');
 }
 
 const rom = new Uint8Array(readFileSync(romPath));
-const gb: Emulator = useWasm ? wasmGameBoy(rom) : new GameBoy(rom);
+const gb = gameBoy(rom);
 gb.apu.outputEnabled = false;
 const version = detectVersion(rom);
 if (!version) throw new Error('not a supported Gen 1 ROM');
@@ -223,7 +220,7 @@ for (const raw of script.split(/[\n;]/)) {
         end = bot.step();
         if (process.env.GRIND_TRACE && frame >= Number(process.env.GRIND_TRACE)) {
           const c = callChain(gb, data.sym);
-          const t = `${classify(c)} ${c.join('<')} btn=${gb instanceof GameBoy ? gb.bus.pressed : '?'} bank=${gb.cart.currentRomBank} pc=${gb.cpu.pc.toString(16)}`;
+          const t = `${classify(c)} ${c.join('<')} bank=${gb.cart.currentRomBank} pc=${gb.cpu.pc.toString(16)}`;
           if (t !== traceLast) console.log(`[f${frame}] ${t}`);
           traceLast = t;
         }

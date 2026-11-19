@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { parseHeader } from '../core/cart.ts';
+import { parseHeader } from '../core/header.ts';
 import { detectVersion } from '../gen1/rom.ts';
 import { db, requestPersistence, romKeyFor, type RomRecord } from '../platform/storage.ts';
 

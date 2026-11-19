@@ -1,5 +1,5 @@
 // A cursor over the flat number array that save states pass through. The layout
-// mirrors the TypeScript SaveState arrays (see src/core/wasm.ts).
+// mirrors the SaveState arrays in src/core/gameboy.ts.
 
 pub struct State<'a> {
     buf: &'a mut [f64],

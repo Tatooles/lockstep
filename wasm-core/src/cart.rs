@@ -1,4 +1,4 @@
-// Cartridge + MBC1/2/3/5: a port of src/core/cart.ts.
+// Cartridge + memory bank controllers (MBC1, MBC2, MBC3 with RTC, MBC5).
 
 use crate::state::State;
 
