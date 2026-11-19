@@ -2,7 +2,8 @@ import { MAPS } from '../gen1/maps.ts';
 import type { Gen1Data } from '../gen1/rom.ts';
 import { areaOf, ownedFamilies, usedAreas } from '../run/engine.ts';
 import type { Encounter, Run } from '../run/types.ts';
-import type { Snapshot } from '../gen1/watcher.ts';
+import type { MonData, Snapshot } from '../gen1/watcher.ts';
+import { levelProgress } from '../gen1/exp.ts';
 
 export type RouteState = 'untracked' | 'none' | 'noballs' | 'open' | 'pending' | 'caught' | 'failed' | 'loading';
 
@@ -59,6 +60,14 @@ export function isDupe(run: Run | null, data: Gen1Data | null, species: number):
   if (!run || !data || !run.rules.dupesClause) return false;
   const sp = data.species.get(species);
   return !!sp && ownedFamilies(run, data).has(sp.family);
+}
+
+/** Share of the way to the next level, 0–1 (1 at level 100), or null if the species is unknown. */
+export function xpFraction(data: Gen1Data, m: MonData): number | null {
+  const growth = data.species.get(m.species)?.growth;
+  if (growth === undefined) return null;
+  const xp = levelProgress(growth, m.level, m.exp);
+  return xp ? xp.into / xp.span : 1;
 }
 
 export function hpClass(hp: number, max: number): string {

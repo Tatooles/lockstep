@@ -488,12 +488,18 @@ button {
   outline: 2px solid var(--ink);
   outline-offset: -2px;
 }
-.hp {
+.hp,
+.xp {
   width: 82%;
   height: 4px;
   border-radius: 2px;
-  background: var(--panel-2);
+  /* Tinted from the ink so the empty part shows on any card background. */
+  background: color-mix(in srgb, var(--ink) 16%, transparent);
   overflow: hidden;
+}
+.mon-pip .xp {
+  height: 3px;
+  margin-top: -1px;
 }
 .hp i {
   display: block;
@@ -1725,15 +1731,13 @@ select.outcome {
   margin-top: 8px;
 }
 
-/* Experience bar (team cards) */
+/* Experience bars (team strip and team cards) */
 .mon-card .xp {
   width: 100%;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--panel-2);
-  overflow: hidden;
+  height: 6px;
+  border-radius: 3px;
 }
-.mon-card .xp i {
+.xp i {
   display: block;
   height: 100%;
   background: var(--xp);
@@ -1741,7 +1745,7 @@ select.outcome {
   transition: width 0.3s ease;
 }
 @media (prefers-reduced-motion: reduce) {
-  .mon-card .xp i {
+  .xp i {
     transition: none;
   }
 }

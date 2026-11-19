@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import type { Session } from '../platform/session.ts';
 import { Controls, useGamepad, useKeyboard } from './Controls.tsx';
-import { hpClass, routeInfo, routeLine } from './derive.ts';
+import { hpClass, routeInfo, routeLine, xpFraction } from './derive.ts';
 import { GrindModal } from './GrindModal.tsx';
 import { NewRunModal } from './NewRunModal.tsx';
 import { prefs } from './prefs.ts';
@@ -156,6 +156,7 @@ export function Play({ session, onExit }: { session: Session; onExit: () => void
             const dead = run?.mons[m.key]?.status === 'dead';
             const active = !!snap?.inBattle && snap.activeSlot === i;
             const hp = active && snap?.activeHp != null ? snap.activeHp : m.hp;
+            const xp = xpFraction(data, m);
             return (
               <div key={m.key + i} className={`mon-pip${dead ? ' dead' : ''}${active ? ' active' : ''}`}>
                 <Sprite data={data} species={m.species} alt={m.nickname} />
@@ -163,6 +164,11 @@ export function Play({ session, onExit }: { session: Session; onExit: () => void
                 <span className={`hp ${hpClass(hp, m.maxHp)}`}>
                   <i style={{ width: `${m.maxHp ? (100 * hp) / m.maxHp : 0}%` }} />
                 </span>
+                {xp !== null && (
+                  <span className="xp">
+                    <i style={{ width: `${100 * xp}%` }} />
+                  </span>
+                )}
               </div>
             );
           })}
