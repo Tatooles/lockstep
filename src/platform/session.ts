@@ -1,0 +1,476 @@
+// A play session: emulator + frame loop + audio + Nuzlocke tracker + persistence.
+
+import { FRAME_RATE, SCREEN_H, SCREEN_W } from '../core/constants.ts';
+import { GameBoy } from '../core/gameboy.ts';
+import { nextMilestone, readMilestones, type Milestone } from '../gen1/milestones.ts';
+import { detectVersion, Gen1Data } from '../gen1/rom.ts';
+import { SYMBOLS } from '../gen1/symbols.ts';
+import { EventDiffer, Gen1Reader, type Ram, type Snapshot } from '../gen1/watcher.ts';
+import { applyEvent, liveWarnings, newRun, syncMons } from '../run/engine.ts';
+import { DEFAULT_RULES, type Notice, type Rules, type Run } from '../run/types.ts';
+import { AudioOut } from './audio.ts';
+import { packPalette, paletteById } from './palettes.ts';
+import { db, type RomRecord } from './storage.ts';
+
+export const SPEEDS = [1, 2, 4, 8] as const;
+
+export interface ToastItem extends Notice {
+  id: number;
+  at: number;
+}
+
+export interface SessionView {
+  snap: Snapshot | null;
+  run: Run | null;
+  paused: boolean;
+  speed: number;
+  toasts: ToastItem[];
+  warnings: string[];
+  milestone: Milestone | null;
+  fps: number;
+  muted: boolean;
+  version: string | null;
+  rev: number;
+}
+
+const FRAME_MS = 1000 / FRAME_RATE;
+const TRACK_EVERY = 4;
+
+export class Session {
+  readonly gb: GameBoy;
+  readonly rom: RomRecord;
+  readonly data: Gen1Data | null;
+  readonly milestones: Milestone[];
+  readonly audio = new AudioOut();
+  private reader: Gen1Reader | null;
+  private differ = new EventDiffer();
+  private run: Run | null = null;
+  private snap: Snapshot | null = null;
+  private ram: Ram;
+
+  private canvas: CanvasRenderingContext2D | null = null;
+  private image: ImageData | null = null;
+  private pixels: Uint32Array | null = null;
+  private palette = packPalette(paletteById('dusk'));
+
+  private raf = 0;
+  private last = 0;
+  private acc = 0;
+  private frameNo = 0;
+  private paused = false;
+  private hidden = false;
+  private speed = 1;
+  private muted = false;
+  private fpsFrames = 0;
+  private fpsAt = 0;
+  private fps = 0;
+
+  private toasts: ToastItem[] = [];
+  private toastId = 0;
+  private view: SessionView;
+  private listeners = new Set<() => void>();
+  private publishAt = 0;
+  private runDirty = false;
+  private runSaveTimer = 0;
+  private sramTimer = 0;
+  private resumeTimer = 0;
+  private rev = 0;
+  private destroyed = false;
+  private onHide = () => this.handleHide();
+  private onVis = () => (document.visibilityState === 'hidden' ? this.handleHide() : this.handleShow());
+
+  private constructor(rom: RomRecord, sram: Uint8Array | undefined) {
+    this.rom = rom;
+    this.gb = new GameBoy(rom.data);
+    if (sram && sram.length === this.gb.cart.ram.length) this.gb.cart.ram.set(sram);
+    const version = detectVersion(rom.data);
+    this.data = version ? new Gen1Data(rom.data, version) : null;
+    this.milestones = this.data ? readMilestones(this.data) : [];
+    this.reader = version ? new Gen1Reader(SYMBOLS[version]) : null;
+    const wram = this.gb.bus.wram;
+    const bus = this.gb.bus;
+    this.ram = {
+      u8: (a: number) => (a >= 0xc000 && a < 0xe000 ? wram[a - 0xc000] : bus.read(a)),
+    };
+    this.view = this.buildView();
+    document.addEventListener('visibilitychange', this.onVis);
+    window.addEventListener('pagehide', this.onHide);
+  }
+
+  static async open(rom: RomRecord): Promise<Session> {
+    const sram = await db.getSram(rom.key);
+    const s = new Session(rom, sram);
+    const resume = await db.getState(rom.key, 'resume');
+    if (resume) {
+      try {
+        s.gb.loadState(resume.state);
+      } catch (err) {
+        console.warn('Could not restore resume state', err);
+      }
+    }
+    const activeRunId = await db.getKv<string>(`activeRun:${rom.key}`);
+    if (activeRunId) {
+      const run = await db.getRun(activeRunId);
+      if (run) s.attachRun(run);
+    }
+    await db.putRom({ ...rom, lastPlayedAt: Date.now() });
+    s.start();
+    return s;
+  }
+
+  // ---- external store for React ----
+  subscribe = (fn: () => void): (() => void) => {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  };
+
+  getView = (): SessionView => this.view;
+
+  private buildView(): SessionView {
+    const cap = this.snap ? nextMilestone(this.milestones, this.snap.badges) : null;
+    return {
+      snap: this.snap,
+      run: this.run,
+      paused: this.paused,
+      speed: this.speed,
+      toasts: this.toasts,
+      warnings: this.run && this.snap ? liveWarnings(this.run, this.snap, cap?.ace ?? null) : [],
+      milestone: cap,
+      fps: this.fps,
+      muted: this.muted,
+      version: this.data?.version ?? null,
+      rev: this.rev,
+    };
+  }
+
+  private publish(): void {
+    this.rev++;
+    this.view = this.buildView();
+    for (const l of this.listeners) l();
+  }
+
+  // ---- rendering ----
+  attachCanvas(canvas: HTMLCanvasElement | null): void {
+    if (!canvas) {
+      this.canvas = null;
+      return;
+    }
+    canvas.width = SCREEN_W;
+    canvas.height = SCREEN_H;
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctx) return;
+    this.canvas = ctx;
+    this.image = ctx.createImageData(SCREEN_W, SCREEN_H);
+    this.pixels = new Uint32Array(this.image.data.buffer);
+    this.present();
+  }
+
+  setPalette(id: string): void {
+    this.palette = packPalette(paletteById(id));
+    this.present();
+  }
+
+  private present(): void {
+    if (!this.canvas || !this.image || !this.pixels) return;
+    const f = this.gb.ppu.frame;
+    const px = this.pixels;
+    const pal = this.palette;
+    for (let i = 0; i < f.length; i++) px[i] = pal[f[i]];
+    this.canvas.putImageData(this.image, 0, 0);
+  }
+
+  // ---- loop ----
+  private start(): void {
+    this.last = performance.now();
+    this.fpsAt = this.last;
+    const loop = (now: number) => {
+      if (this.destroyed) return;
+      this.raf = requestAnimationFrame(loop);
+      this.tick(now);
+    };
+    this.raf = requestAnimationFrame(loop);
+    this.sramTimer = window.setInterval(() => void this.persistSram(), 2000);
+    this.resumeTimer = window.setInterval(() => void this.saveResume(), 30000);
+  }
+
+  private tick(now: number): void {
+    let dt = now - this.last;
+    this.last = now;
+    if (dt > 100) dt = FRAME_MS; // came back from a stall: don't spiral
+    if (this.paused || this.hidden) return;
+    const apu = this.gb.apu;
+    const audioOn = this.speed === 1 && !this.muted && this.audio.ready;
+    apu.outputEnabled = audioOn;
+    if (audioOn) {
+      // Nudge the resample rate to hold ~60ms of audio queued.
+      const sr = this.audio.sampleRate;
+      const target = sr * 0.06;
+      const err = (target - this.audio.buffered) / target;
+      apu.sampleRate = sr * (1 + Math.max(-0.006, Math.min(0.006, err * 0.006)));
+    }
+    this.acc += dt * this.speed;
+    const t0 = performance.now();
+    let frames = 0;
+    while (this.acc >= FRAME_MS) {
+      this.gb.runFrame();
+      this.acc -= FRAME_MS;
+      frames++;
+      if (++this.frameNo % TRACK_EVERY === 0) this.track();
+      if (performance.now() - t0 > 13) {
+        this.acc = Math.min(this.acc, FRAME_MS);
+        break;
+      }
+    }
+    if (frames > 0) {
+      this.present();
+      this.fpsFrames += frames;
+      if (audioOn) this.flushAudio();
+      else apu.clearBuffer();
+    }
+    if (now - this.fpsAt > 1000) {
+      this.fps = Math.round((this.fpsFrames * 1000) / (now - this.fpsAt));
+      this.fpsFrames = 0;
+      this.fpsAt = now;
+    }
+    if (now - this.publishAt > 250) {
+      this.publishAt = now;
+      this.expireToasts(now);
+      this.publish();
+    }
+  }
+
+  private flushAudio(): void {
+    const apu = this.gb.apu;
+    const n = apu.available();
+    if (n === 0) return;
+    const l = new Float32Array(n);
+    const r = new Float32Array(n);
+    apu.drain(l, r, n);
+    this.audio.push(l, r);
+  }
+
+  // ---- tracker ----
+  private track(): void {
+    if (!this.reader) return;
+    const snap = this.reader.read(this.ram);
+    if (!snap.valid) return;
+    this.snap = snap;
+    const events = this.differ.update(snap);
+    if (this.run && this.data) {
+      for (const ev of events) {
+        const notices = applyEvent(this.run, ev, { data: this.data, snap });
+        for (const n of notices) this.toast(n);
+        this.runDirty = true;
+      }
+      syncMons(this.run, snap);
+      if (this.run.rules.forceSetMode) {
+        const a = SYMBOLS[this.data.version].wOptions - 0xc000;
+        this.gb.bus.wram[a] |= 0x40;
+      }
+      if (events.length) this.scheduleRunSave();
+    }
+    if (events.length) this.publish();
+  }
+
+  private toast(n: Notice): void {
+    const now = performance.now();
+    this.toasts = [...this.toasts, { ...n, id: ++this.toastId, at: now }].slice(-4);
+    if ((n.tone === 'bad' || n.tone === 'good') && 'vibrate' in navigator) navigator.vibrate?.(n.tone === 'bad' ? [40, 60, 40] : 20);
+  }
+
+  dismissToast(id: number): void {
+    this.toasts = this.toasts.filter((t) => t.id !== id);
+    this.publish();
+  }
+
+  private expireToasts(now: number): void {
+    const keep = this.toasts.filter((t) => now - t.at < (t.tone === 'bad' ? 7000 : 4500));
+    if (keep.length !== this.toasts.length) this.toasts = keep;
+  }
+
+  // ---- runs ----
+  private attachRun(run: Run): void {
+    run.rules = { ...DEFAULT_RULES, ...run.rules };
+    this.run = run;
+    this.differ = new EventDiffer();
+    this.differ.seedKnown(Object.keys(run.mons));
+  }
+
+  async startRun(name: string, rules: Partial<Rules>): Promise<Run> {
+    const run = newRun({ name, romKey: this.rom.key, version: this.data?.version ?? 'unknown', rules });
+    this.attachRun(run);
+    await db.putRun(run);
+    await db.putKv(`activeRun:${this.rom.key}`, run.id);
+    this.publish();
+    return run;
+  }
+
+  async endRun(): Promise<void> {
+    if (!this.run) return;
+    await db.putRun(this.run);
+    await db.putKv(`activeRun:${this.rom.key}`, null);
+    this.run = null;
+    this.differ = new EventDiffer();
+    this.publish();
+  }
+
+  /** Apply a manual change to the run (from the UI) and persist it. */
+  updateRun(mut: (run: Run) => void): void {
+    if (!this.run) return;
+    mut(this.run);
+    this.run.updatedAt = Date.now();
+    this.scheduleRunSave();
+    this.publish();
+  }
+
+  private scheduleRunSave(): void {
+    if (this.runSaveTimer) return;
+    this.runSaveTimer = window.setTimeout(() => {
+      this.runSaveTimer = 0;
+      void this.saveRun();
+    }, 800);
+  }
+
+  private async saveRun(): Promise<void> {
+    if (!this.run) return;
+    this.runDirty = false;
+    await db.putRun(this.run);
+  }
+
+  // ---- input & controls ----
+  press(button: number, down: boolean): void {
+    this.gb.setButton(button, down);
+    if (down) void this.audio.unlock();
+  }
+
+  setSpeed(speed: number): void {
+    this.speed = speed;
+    this.acc = 0;
+    this.audio.clear();
+    this.publish();
+  }
+
+  cycleSpeed(): void {
+    const i = SPEEDS.indexOf(this.speed as (typeof SPEEDS)[number]);
+    this.setSpeed(SPEEDS[(i + 1) % SPEEDS.length]);
+  }
+
+  setPaused(p: boolean): void {
+    this.paused = p;
+    if (p) this.audio.clear();
+    this.last = performance.now();
+    this.acc = 0;
+    this.publish();
+  }
+
+  setMuted(m: boolean): void {
+    this.muted = m;
+    this.audio.clear();
+    this.publish();
+  }
+
+  reset(): void {
+    // Soft reset: rebuild the machine, keeping battery RAM.
+    const ram = this.gb.cart.ram.slice();
+    const fresh = new GameBoy(this.rom.data);
+    fresh.cart.ram.set(ram);
+    const st = fresh.saveState();
+    this.gb.loadState(st);
+    this.differ.reset();
+  }
+
+  // ---- save states ----
+  canUseStates(): boolean {
+    return !this.run?.rules.noSaveStates;
+  }
+
+  async saveSlot(slot: string): Promise<void> {
+    if (!this.canUseStates()) throw new Error('Save states are disabled for this run');
+    await db.putState({
+      key: `${this.rom.key}:${slot}`,
+      romKey: this.rom.key,
+      slot,
+      savedAt: Date.now(),
+      state: this.gb.saveState(),
+      thumb: this.gb.ppu.frame.slice(),
+      runId: this.run?.id ?? null,
+    });
+  }
+
+  async loadSlot(slot: string): Promise<boolean> {
+    if (!this.canUseStates()) throw new Error('Save states are disabled for this run');
+    const rec = await db.getState(this.rom.key, slot);
+    if (!rec) return false;
+    this.gb.loadState(rec.state);
+    this.differ.reset();
+    this.differ.seedKnown(Object.keys(this.run?.mons ?? {}));
+    this.audio.clear();
+    this.present();
+    return true;
+  }
+
+  // ---- persistence ----
+  private async persistSram(): Promise<void> {
+    const cart = this.gb.cart;
+    if (!cart.ramDirty || cart.ram.length === 0) return;
+    cart.ramDirty = false;
+    await db.putSram(this.rom.key, cart.ram.slice());
+  }
+
+  private async saveResume(): Promise<void> {
+    await db.putState({
+      key: `${this.rom.key}:resume`,
+      romKey: this.rom.key,
+      slot: 'resume',
+      savedAt: Date.now(),
+      state: this.gb.saveState(),
+      runId: this.run?.id ?? null,
+    });
+  }
+
+  async flush(): Promise<void> {
+    await Promise.all([this.persistSram(), this.saveResume(), this.run ? db.putRun(this.run) : Promise.resolve()]);
+  }
+
+  private handleHide(): void {
+    this.hidden = true;
+    this.audio.suspend();
+    void this.flush();
+  }
+
+  private handleShow(): void {
+    this.hidden = false;
+    this.last = performance.now();
+    this.acc = 0;
+    this.audio.clear();
+    this.audio.resume();
+  }
+
+  exportSave(): Blob {
+    return new Blob([this.gb.cart.ram.slice()], { type: 'application/octet-stream' });
+  }
+
+  async importSave(data: Uint8Array): Promise<void> {
+    if (data.length < this.gb.cart.ram.length) throw new Error(`Save file is ${data.length} bytes; expected ${this.gb.cart.ram.length}`);
+    this.gb.cart.ram.set(data.subarray(0, this.gb.cart.ram.length));
+    await db.putSram(this.rom.key, this.gb.cart.ram.slice());
+    await db.deleteState(this.rom.key, 'resume');
+    this.reset();
+  }
+
+  async destroy(): Promise<void> {
+    this.destroyed = true;
+    cancelAnimationFrame(this.raf);
+    clearInterval(this.sramTimer);
+    clearInterval(this.resumeTimer);
+    clearTimeout(this.runSaveTimer);
+    document.removeEventListener('visibilitychange', this.onVis);
+    window.removeEventListener('pagehide', this.onHide);
+    await this.flush();
+    void this.audio.ctx?.close();
+  }
+
+  get dirty(): boolean {
+    return this.runDirty;
+  }
+}

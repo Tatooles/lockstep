@@ -1,0 +1,11 @@
+node_modules
+dist
+test-roms
+vendor-data
+roms
+*.gb
+*.gbc
+*.sav
+.vercel
+tools/out
+test-results.json

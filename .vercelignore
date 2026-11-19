@@ -1,0 +1,10 @@
+node_modules
+dist
+test-roms
+vendor-data
+roms
+tools/out
+test-results.json
+*.gb
+*.gbc
+*.sav
