@@ -260,6 +260,13 @@ int main(void) {
   SOUNDCNT_H = 0x0B0E;  // FIFO A 100%, L+R, timer 0, reset
   TM0CNT_L = 65536 - 1254;
   TM0CNT_H = 0x80;
+#ifdef PSG
+  // Also keep all four PSG channels playing (Pokémon's music uses them).
+  R16(0x4000080) = 0xFF77;              // all channels L+R, max volume
+  SOUNDCNT_H = 0x0B0E | 2;              // PSG at 100%
+  for (int i = 0; i < 8; i++) R16(0x4000090 + i * 2) = (u16)(0x0123 * (i + 1));
+  R16(0x4000070) = 0x80;                // wave DAC on
+#endif
 
   IRQ_VECTOR = (u32)irq_handler;
   DISPSTAT = 8;
@@ -274,6 +281,19 @@ int main(void) {
     mix(mixbuf[buf]);
     stream_map(camx, camy);
     build_oam(camx, camy);
+#ifdef PSG
+    if ((frame & 15) == 0) {
+      u16 f = (u16)(1200 + (rand() & 511));
+      R16(0x4000062) = 0xF780;            // ch1: duty 50%, volume 15, slow decay
+      R16(0x4000064) = f | 0x8000;
+      R16(0x4000068) = 0xF740;            // ch2
+      R16(0x400006C) = (f + 300) | 0x8000;
+      R16(0x4000072) = 0x2000;            // ch3: 100% volume
+      R16(0x4000074) = (f - 400) | 0x8000;
+      R16(0x4000078) = 0xA200;            // ch4: noise
+      R16(0x400007C) = 0x8021;
+    }
+#endif
     if ((frame & 63) == 0) {
       // Occasional bulk work: recolor part of the palette (fades, weather).
       for (int i = 0; i < 256; i++) pal[i] = (u16)(pal[i] + 0x21);

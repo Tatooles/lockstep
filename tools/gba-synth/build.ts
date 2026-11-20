@@ -1,6 +1,7 @@
 // Builds the synthetic benchmark ROM (tools/gba-synth/main.c) with the host's
 // clang (ARM/Thumb codegen) and the Rust toolchain's rust-lld.
-//   node tools/gba-synth/build.ts   -> roms/synth.gba, roms/synth-busy.gba (busy-waits for VBlank)
+//   node tools/gba-synth/build.ts   -> roms/synth.gba, roms/synth-busy.gba (busy-waits for VBlank),
+//   roms/synth-psg.gba (also plays the four PSG channels), roms/ppu-scenes.gba (PPU feature scenes)
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -27,11 +28,13 @@ function rustBin(name: string): string {
 const cflags = ['--target=armv4t-none-eabi', '-mthumb', '-O2', '-ffreestanding', '-nostdlib', '-fno-exceptions', '-Wall'];
 execFileSync('clang', ['--target=armv4t-none-eabi', '-c', join(here, 'crt0.s'), '-o', join(out, 'crt0.o')], { stdio: 'inherit' });
 mkdirSync(join(root, 'roms'), { recursive: true });
-for (const [name, defs] of [
-  ['synth', []],
-  ['synth-busy', ['-DBUSYWAIT']],
+for (const [name, src, defs] of [
+  ['synth', 'main.c', []],
+  ['synth-busy', 'main.c', ['-DBUSYWAIT']],
+  ['synth-psg', 'main.c', ['-DPSG']],
+  ['ppu-scenes', 'ppu.c', []],
 ] as const) {
-  execFileSync('clang', [...cflags, ...defs, '-c', join(here, 'main.c'), '-o', join(out, `${name}.o`)], { stdio: 'inherit' });
+  execFileSync('clang', [...cflags, ...defs, '-c', join(here, src), '-o', join(out, `${name}.o`)], { stdio: 'inherit' });
   const elf = join(out, `${name}.elf`);
   execFileSync(rustBin('rust-lld'), ['-flavor', 'gnu', '-T', join(here, 'gba.ld'), join(out, 'crt0.o'), join(out, `${name}.o`), '-o', elf], {
     stdio: 'inherit',

@@ -124,6 +124,11 @@ fn main() {
     if g.cpu.insns > 0 {
         println!("insns {} = {:.1} M/s, {:.2} cycles/insn (busy)", g.cpu.insns, g.cpu.insns as f64 / secs / 1e6, (g.sys.now - g.sys.idle_cycles) as f64 / g.cpu.insns as f64);
     }
+    if args.iter().any(|a| a == "--audio") {
+        let b = &g.sys.apu.buffer;
+        let rms = (b.iter().map(|s| (s * s) as f64).sum::<f64>() / b.len() as f64).sqrt();
+        println!("audio rms {rms:.4} (write pos {})", g.sys.apu.write_pos);
+    }
     if args.iter().any(|a| a == "--r12") {
         println!("r12 = {}", g.cpu.r[12]);
     }
