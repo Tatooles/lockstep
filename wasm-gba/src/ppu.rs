@@ -25,6 +25,8 @@ pub struct Ppu {
     /// bit0 semi-transparent, bit1 inside the OBJ window
     obj_flags: [u8; W],
     any_semi: bool,
+    /// Bit p set if any sprite pixel on this line has priority p.
+    obj_prios: u8,
     win: [u8; W],
     top: [u16; W],
     top_l: [u8; W],
@@ -32,12 +34,29 @@ pub struct Ppu {
     bot_l: [u8; W],
 }
 
-#[inline(always)]
-fn rgba(c: u16) -> u32 {
+const fn rgba_calc(c: u16) -> u32 {
     let r = (c & 31) as u32;
     let g = ((c >> 5) & 31) as u32;
     let b = ((c >> 10) & 31) as u32;
     0xFF00_0000 | ((b << 3 | b >> 2) << 16) | ((g << 3 | g >> 2) << 8) | (r << 3 | r >> 2)
+}
+
+// BGR555 -> RGBA8888 for every color. Filled at start-up (zero-initialized
+// memory, so it costs nothing in the Wasm binary).
+static mut RGBA: [u32; 32768] = [0; 32768];
+
+fn init_rgba() {
+    let t = unsafe { &mut *core::ptr::addr_of_mut!(RGBA) };
+    if t[32767] == 0 {
+        for (i, v) in t.iter_mut().enumerate() {
+            *v = rgba_calc(i as u16);
+        }
+    }
+}
+
+#[inline(always)]
+fn rgba(c: u16) -> u32 {
+    unsafe { *core::ptr::addr_of!(RGBA).cast::<u32>().add((c & 0x7FFF) as usize) }
 }
 
 #[inline(always)]
@@ -115,6 +134,7 @@ const OBJ_SIZES: [[(u32, u32); 4]; 3] = [
 
 impl Ppu {
     pub fn init(&mut self) {
+        init_rgba();
         self.frame.fill(0xFF00_0000);
     }
 
@@ -157,23 +177,29 @@ impl Sys {
         };
         let enabled = (dispcnt >> 8) as u8 & (bg_mask | 0x10);
 
-        for i in 0..4 {
-            if enabled & (1 << i) == 0 {
-                continue;
-            }
-            match mode {
-                0 => self.render_text(i, y),
-                1 if i < 2 => self.render_text(i, y),
-                1 | 2 => self.render_affine(i),
-                _ => self.render_bitmap(mode),
-            }
-            self.apply_mosaic(i);
-        }
         self.ppu.any_semi = false;
+        self.ppu.obj_prios = 0;
         if enabled & 0x10 != 0 || dispcnt & 0x8000 != 0 {
             self.render_obj(y, mode >= 3);
         }
-        self.compose(y, enabled);
+        let windows = self.compute_windows(y);
+        let effect = (self.io[0x50 >> 1] >> 6) & 3;
+        // Track the top two layers per pixel only when something blends.
+        let two = effect != 0 || self.ppu.any_semi;
+        let backdrop = pal(&self.palette, 0);
+        self.ppu.top.fill(backdrop);
+        if two {
+            self.ppu.top_l.fill(LAYER_BD);
+            self.ppu.bot.fill(backdrop);
+            self.ppu.bot_l.fill(LAYER_BD);
+        }
+        match (two, windows) {
+            (false, false) => self.paint_layers::<false, false>(y, mode, enabled),
+            (false, true) => self.paint_layers::<false, true>(y, mode, enabled),
+            (true, false) => self.paint_layers::<true, false>(y, mode, enabled),
+            (true, true) => self.paint_layers::<true, true>(y, mode, enabled),
+        }
+        self.finish_line(y, two, windows);
         self.advance_affine();
     }
 
@@ -429,6 +455,7 @@ impl Sys {
                     } else if ppu.obj[px] == TRANSPARENT || prio < ppu.obj_prio[px] {
                         ppu.obj[px] = pal(palette, if bpp8 { 0x100 | c } else { pb | c });
                         ppu.obj_prio[px] = prio;
+                        ppu.obj_prios |= 1 << prio;
                         ppu.obj_flags[px] = (ppu.obj_flags[px] & 2) | semi;
                     }
                 }
@@ -447,6 +474,7 @@ impl Sys {
                     } else if ppu.obj[px] == TRANSPARENT || prio < ppu.obj_prio[px] {
                         ppu.obj[px] = pal(palette, if bpp8 { 0x100 | c } else { pb | c });
                         ppu.obj_prio[px] = prio;
+                        ppu.obj_prios |= 1 << prio;
                         ppu.obj_flags[px] = (ppu.obj_flags[px] & 2) | semi;
                     }
                 }
@@ -454,13 +482,12 @@ impl Sys {
         }
     }
 
-    /// Fill `win` with the enabled-layer mask per pixel (all layers when no
-    /// window is on).
-    fn compute_windows(&mut self, y: u32) {
+    /// Fill `win` with the enabled-layer mask per pixel. Returns false (and
+    /// leaves `win` alone) when no window is on.
+    fn compute_windows(&mut self, y: u32) -> bool {
         let dispcnt = self.io[0];
         if dispcnt & 0xE000 == 0 {
-            self.ppu.win.fill(0x3F);
-            return;
+            return false;
         }
         let winin = self.io[0x48 >> 1];
         let winout = self.io[0x4A >> 1];
@@ -494,101 +521,188 @@ impl Sys {
                 self.ppu.win[..x2.min(W)].fill(bits);
             }
         }
+        true
     }
 
-    fn compose(&mut self, y: u32, enabled: u8) {
-        self.compute_windows(y);
-        let bldcnt = self.io[0x50 >> 1] as u32;
-        let effect = (bldcnt >> 6) & 3;
-        let backdrop = pal(&self.palette, 0);
-        let ppu = &mut self.ppu;
-        // Track the top two layers only when something blends.
-        let two = effect != 0 || ppu.any_semi;
-        ppu.top.fill(backdrop);
-        if two {
-            ppu.top_l.fill(LAYER_BD);
-            ppu.bot.fill(backdrop);
-            ppu.bot_l.fill(LAYER_BD);
-        }
-
-        // Paint back to front: per priority, BGs by descending index, then OBJ.
-        // Branch-free bodies so the loops vectorize.
+    /// Paint every layer back to front: per priority, BGs by descending index,
+    /// then that priority's sprites. Tile BGs are decoded straight into the
+    /// compositing buffers; the rest go through their line buffer.
+    fn paint_layers<const TWO: bool, const WIN: bool>(&mut self, y: u32, mode: u16, enabled: u8) {
         for p in (0..4u16).rev() {
             for i in (0..4usize).rev() {
                 if enabled & (1 << i) == 0 || self.io[4 + i] & 3 != p {
                     continue;
                 }
-                let bit = 1u8 << i;
+                let text = mode == 0 || (mode == 1 && i < 2);
+                if text && self.io[4 + i] & 0x40 == 0 {
+                    self.draw_text::<TWO, WIN>(i, y);
+                    continue;
+                }
+                match mode {
+                    0 | 1 if text => self.render_text(i, y),
+                    1 | 2 => self.render_affine(i),
+                    _ => self.render_bitmap(mode),
+                }
+                self.apply_mosaic(i);
+                let ppu = &mut self.ppu;
+                let mut paint = Paint { top: &mut ppu.top, top_l: &mut ppu.top_l, bot: &mut ppu.bot, bot_l: &mut ppu.bot_l, win: &ppu.win };
                 let src = &ppu.bg[i];
-                if two {
-                    for x in 0..W {
-                        let c = src[x];
-                        let vis = c != TRANSPARENT && ppu.win[x] & bit != 0;
-                        let (t, tl) = (ppu.top[x], ppu.top_l[x]);
-                        ppu.bot[x] = if vis { t } else { ppu.bot[x] };
-                        ppu.bot_l[x] = if vis { tl } else { ppu.bot_l[x] };
-                        ppu.top_l[x] = if vis { i as u8 } else { tl };
-                        ppu.top[x] = if vis { c } else { t };
-                    }
-                } else {
-                    for x in 0..W {
-                        let c = src[x];
-                        let vis = c != TRANSPARENT && ppu.win[x] & bit != 0;
-                        ppu.top[x] = if vis { c } else { ppu.top[x] };
+                let bit = 1u8 << i;
+                for x in 0..W {
+                    if src[x] != TRANSPARENT {
+                        paint.put::<TWO, WIN>(x, src[x], i as u8, bit);
                     }
                 }
             }
-            if enabled & 0x10 != 0 {
+            if enabled & 0x10 != 0 && self.ppu.obj_prios & (1 << p) != 0 {
                 let p = p as u8;
-                if two {
-                    for x in 0..W {
-                        let c = ppu.obj[x];
-                        let vis = c != TRANSPARENT && ppu.obj_prio[x] == p && ppu.win[x] & 0x10 != 0;
-                        let (t, tl) = (ppu.top[x], ppu.top_l[x]);
-                        ppu.bot[x] = if vis { t } else { ppu.bot[x] };
-                        ppu.bot_l[x] = if vis { tl } else { ppu.bot_l[x] };
-                        ppu.top_l[x] = if vis { LAYER_OBJ } else { tl };
-                        ppu.top[x] = if vis { c } else { t };
-                    }
-                } else {
-                    for x in 0..W {
-                        let c = ppu.obj[x];
-                        let vis = c != TRANSPARENT && ppu.obj_prio[x] == p && ppu.win[x] & 0x10 != 0;
-                        ppu.top[x] = if vis { c } else { ppu.top[x] };
+                let ppu = &mut self.ppu;
+                let mut paint = Paint { top: &mut ppu.top, top_l: &mut ppu.top_l, bot: &mut ppu.bot, bot_l: &mut ppu.bot_l, win: &ppu.win };
+                for x in 0..W {
+                    let c = ppu.obj[x];
+                    if c != TRANSPARENT && ppu.obj_prio[x] == p {
+                        paint.put::<TWO, WIN>(x, c, LAYER_OBJ, 0x10);
                     }
                 }
             }
         }
+    }
 
-        if two {
-            let alpha = self.io[0x52 >> 1];
-            let eva = ((alpha & 0x1F) as u32).min(16);
-            let evb = (((alpha >> 8) & 0x1F) as u32).min(16);
-            let evy = ((self.io[0x54 >> 1] & 0x1F) as u32).min(16);
-            for x in 0..W {
-                let top = ppu.top[x];
-                let tl = ppu.top_l[x] as u32;
-                let second_t = (bldcnt >> (8 + ppu.bot_l[x] as u32)) & 1 != 0;
-                let semi = tl == LAYER_OBJ as u32 && ppu.obj_flags[x] & 1 != 0;
-                let first_t = ppu.win[x] & 0x20 != 0 && (bldcnt >> tl) & 1 != 0;
-                ppu.top[x] = if semi && second_t {
-                    blend(top, ppu.bot[x], eva, evb)
-                } else if first_t {
-                    match effect {
-                        1 if second_t => blend(top, ppu.bot[x], eva, evb),
-                        2 => brighten(top, evy),
-                        3 => darken(top, evy),
-                        _ => top,
+    /// A text BG decoded tile by tile straight into the compositing buffers.
+    fn draw_text<const TWO: bool, const WIN: bool>(&mut self, i: usize, y: u32) {
+        let cnt = self.io[4 + i];
+        let hofs = (self.io[8 + i * 2] & 0x1FF) as u32;
+        let vofs = (self.io[9 + i * 2] & 0x1FF) as u32;
+        let char_base = ((cnt >> 2) & 3) as usize * 0x4000;
+        let screen_base = ((cnt >> 8) & 0x1F) as usize * 0x800;
+        let bpp8 = cnt & 0x80 != 0;
+        let size = cnt >> 14;
+        let wmask = if size & 1 != 0 { 511 } else { 255 };
+        let hmask = if size & 2 != 0 { 511 } else { 255 };
+        let ty = (y + vofs) & hmask;
+        let block_y = if ty >= 256 { if size & 1 != 0 { 2 } else { 1 } } else { 0 };
+        let map_row = screen_base + ((ty as usize >> 3) & 31) * 64;
+        let layer = i as u8;
+        let bit = 1u8 << i;
+
+        let vram = &self.vram;
+        let palette = &self.palette;
+        let ppu = &mut self.ppu;
+        let mut paint = Paint { top: &mut ppu.top, top_l: &mut ppu.top_l, bot: &mut ppu.bot, bot_l: &mut ppu.bot_l, win: &ppu.win };
+        let mut x = 0usize;
+        let mut tx = hofs & wmask;
+        while x < W {
+            let block = block_y + (tx >> 8) as usize;
+            let map_addr = (map_row + block * 0x800 + ((tx as usize >> 3) & 31) * 2) & 0xFFFE;
+            let entry = v16(vram, map_addr);
+            let tile = (entry & 0x3FF) as usize;
+            let row = if entry & 0x800 != 0 { 7 - (ty & 7) } else { ty & 7 } as usize;
+            let start = (tx & 7) as usize;
+            let n = (8 - start).min(W - x);
+            if bpp8 {
+                let addr = char_base + tile * 64 + row * 8;
+                if addr + 8 <= 0x10000 {
+                    let mut bits = v32(vram, addr) as u64 | (v32(vram, addr + 4) as u64) << 32;
+                    if entry & 0x400 != 0 {
+                        bits = bits.swap_bytes();
                     }
-                } else {
-                    top
-                };
+                    bits >>= start * 8;
+                    if bits != 0 {
+                        for k in 0..n {
+                            let p = (bits >> (k * 8)) as u8;
+                            if p != 0 {
+                                paint.put::<TWO, WIN>(x + k, pal(palette, p as usize), layer, bit);
+                            }
+                        }
+                    }
+                }
+            } else {
+                let addr = char_base + tile * 32 + row * 4;
+                if addr + 4 <= 0x10000 {
+                    let mut bits = v32(vram, addr);
+                    if entry & 0x400 != 0 {
+                        bits = bits.swap_bytes();
+                        bits = ((bits & 0x0F0F_0F0F) << 4) | ((bits >> 4) & 0x0F0F_0F0F);
+                    }
+                    bits >>= start * 4;
+                    if bits != 0 {
+                        let pb = ((entry >> 12) as usize) << 4;
+                        for k in 0..n {
+                            let p = (bits >> (k * 4)) & 0xF;
+                            if p != 0 {
+                                paint.put::<TWO, WIN>(x + k, pal(palette, pb | p as usize), layer, bit);
+                            }
+                        }
+                    }
+                }
             }
+            x += n;
+            tx = (tx + n as u32) & wmask;
         }
+    }
+
+    /// Color effects (when TWO) and conversion to RGBA.
+    fn finish_line(&mut self, y: u32, two: bool, windows: bool) {
         let row = y as usize * W;
+        let ppu = &mut self.ppu;
         let out = &mut ppu.frame[row..row + W];
-        for x in 0..W {
-            out[x] = rgba(ppu.top[x]);
+        if !two {
+            for x in 0..W {
+                out[x] = rgba(ppu.top[x]);
+            }
+            return;
         }
+        let bldcnt = self.io[0x50 >> 1] as u32;
+        let effect = (bldcnt >> 6) & 3;
+        let alpha = self.io[0x52 >> 1];
+        let eva = ((alpha & 0x1F) as u32).min(16);
+        let evb = (((alpha >> 8) & 0x1F) as u32).min(16);
+        let evy = ((self.io[0x54 >> 1] & 0x1F) as u32).min(16);
+        for x in 0..W {
+            let top = ppu.top[x];
+            let tl = ppu.top_l[x] as u32;
+            let second_t = (bldcnt >> (8 + ppu.bot_l[x] as u32)) & 1 != 0;
+            let semi = tl == LAYER_OBJ as u32 && ppu.obj_flags[x] & 1 != 0;
+            let effects_on = !windows || ppu.win[x] & 0x20 != 0;
+            let first_t = effects_on && (bldcnt >> tl) & 1 != 0;
+            let c = if semi && second_t {
+                blend(top, ppu.bot[x], eva, evb)
+            } else if first_t {
+                match effect {
+                    1 if second_t => blend(top, ppu.bot[x], eva, evb),
+                    2 => brighten(top, evy),
+                    3 => darken(top, evy),
+                    _ => top,
+                }
+            } else {
+                top
+            };
+            out[x] = rgba(c);
+        }
+    }
+}
+
+/// The compositing buffers: the top layer's color per pixel and, when
+/// blending, its layer id and the color and id of the layer beneath it.
+struct Paint<'a> {
+    top: &'a mut [u16; W],
+    top_l: &'a mut [u8; W],
+    bot: &'a mut [u16; W],
+    bot_l: &'a mut [u8; W],
+    win: &'a [u8; W],
+}
+
+impl Paint<'_> {
+    #[inline(always)]
+    fn put<const TWO: bool, const WIN: bool>(&mut self, x: usize, c: u16, layer: u8, bit: u8) {
+        if WIN && self.win[x] & bit == 0 {
+            return;
+        }
+        if TWO {
+            self.bot[x] = self.top[x];
+            self.bot_l[x] = self.top_l[x];
+            self.top_l[x] = layer;
+        }
+        self.top[x] = c;
     }
 }
