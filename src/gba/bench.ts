@@ -11,14 +11,16 @@ export function walk(frame: number): number {
 
 export interface Pass {
   frames: number;
+  /** Share of emulated time the GBA's CPU was busy (not halted or idling). */
+  busy: number;
   ms: number;
   /** Multiples of real time (59.73 fps). */
   speed: number;
   msPerFrame: number;
 }
 
-function pass(frames: number, ms: number): Pass {
-  return { frames, ms, speed: frames / (ms / 1000) / GBA_FPS, msPerFrame: ms / frames };
+function pass(frames: number, ms: number, busy: number): Pass {
+  return { frames, busy, ms, speed: frames / (ms / 1000) / GBA_FPS, msPerFrame: ms / frames };
 }
 
 /**
@@ -34,6 +36,8 @@ export async function measure(
   if (state) gba.loadState(state);
   gba.render = opts.render;
   const chunkFrames = opts.chunkFrames ?? frames;
+  const c0 = gba.cycles;
+  const i0 = gba.idleCycles;
   let ms = 0;
   let done = 0;
   while (done < frames) {
@@ -48,7 +52,8 @@ export async function measure(
     if (opts.chunk) await opts.chunk(done);
   }
   gba.render = true;
-  return pass(frames, ms);
+  const cycles = gba.cycles - c0;
+  return pass(frames, ms, cycles > 0 ? 1 - (gba.idleCycles - i0) / cycles : 1);
 }
 
 export interface BenchResult {
@@ -79,5 +84,6 @@ export function formatResult(r: BenchResult): string {
     `full:      ${f(r.full)}`,
     `cpu only:  ${f(r.cpuOnly)}`,
     `graphics:  ${(r.graphicsShare * 100).toFixed(0)}% of frame time`,
+    `GBA CPU busy: ${(r.full.busy * 100).toFixed(0)}% of emulated time`,
   ].join('\n');
 }

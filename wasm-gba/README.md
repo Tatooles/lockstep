@@ -71,4 +71,23 @@ copies by DMA in VBlank, BG alpha blending. It keeps the CPU about 50% busy.
 
 For a real game, put a ROM in `roms/`, drive it to the overworld with
 `tools/gba-play.ts ... --save roms/<name>.state` and bench with
-`?rom=<name>`.
+`?rom=<name>` (`tools/gba-contact.ts` tiles the step screenshots for review).
+
+## Results on Gen 3 Pokémon (M3 Pro, uncapped, multiples of real time)
+
+Emerald (boots, intro, new game, naming, truck, RTC clock setting, TV scene,
+out to Littleroot) and FireRed (intro, Oak's speech, naming, house, out to
+Pallet Town) both play from power-on with no glitches seen. Benched from an
+overworld save state while walking left and right:
+
+| | Emerald full | Emerald CPU only | FireRed full | FireRed CPU only |
+| --- | --- | --- | --- | --- |
+| Node 26 (V8) | 27.2× | 51.7× | 27.6× | 49.0× |
+| Chrome 151 | 26.5× | 49.7× | 25.9× | 47.3× |
+| Safari 27.0.1 | 26.7× | 52.6× | 27.3× | 51.1× |
+
+Both games busy-wait for VBlank (Emerald at 0x080008C6, FireRed at
+0x080008AA). Idle-loop detection takes the GBA CPU from 100% to ~40% busy
+and makes the core ~1.7× faster; without it, native speed is ~28–30×.
+Drawing is ~45–49% of frame time and can be skipped on fast-forward frames
+that aren't shown.
