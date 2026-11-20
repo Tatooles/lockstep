@@ -97,6 +97,8 @@ pub struct Sys {
     pub rtc: Rtc,
     pub frame_done: bool,
     pub frames: u32,
+    /// Draw scanlines (off for CPU-only benchmarking).
+    pub render: bool,
 
     // ROM: outside the saved state; restored by the host-side loader.
     pub rom: *const u8,
@@ -165,6 +167,7 @@ impl Sys {
     pub fn init(&mut self, rom: *const u8, rom_len: u32) {
         self.rom = rom;
         self.rom_len = rom_len;
+        self.render = true;
         build_bios(&mut self.bios);
         self.bios_latch = 0xE129_F000;
         self.events = [NEVER; NEV];
@@ -267,7 +270,7 @@ impl Sys {
             // HBlank starts.
             self.ppu.in_hblank = true;
             let line = self.ppu.vcount;
-            if line < 160 {
+            if line < 160 && self.render {
                 self.render_line(line);
             }
             self.io[0x004 >> 1] |= 2;
@@ -444,6 +447,7 @@ impl Sys {
             0x05 => rd32(&self.palette, (addr & 0x3FC) as usize),
             0x06 => rd32(&self.vram, vram_index(addr)),
             0x07 => rd32(&self.oam, (addr & 0x3FC) as usize),
+            0x08..=0x0D if addr & 0x01FF_FF00 != 0 || !self.rtc.readable => self.rom32(addr),
             0x08..=0x0D => self.rom16_gpio(addr) | (self.rom16_gpio(addr + 2) << 16),
             0x0E | 0x0F => self.save.read(addr) as u32 * 0x0101_0101,
             _ => self.open_bus(),
@@ -867,6 +871,7 @@ impl Bus for Sys {
         match addr >> 24 {
             0x02 => rd16(&self.ewram, (addr & 0x3FFFE) as usize),
             0x03 => rd16(&self.iwram, (addr & 0x7FFE) as usize),
+            0x08..=0x0D if addr & 0x01FF_FF00 != 0 || !self.rtc.readable => self.rom16(addr),
             _ => self.read16_raw(addr),
         }
     }
@@ -878,6 +883,7 @@ impl Bus for Sys {
         match addr >> 24 {
             0x02 => rd32(&self.ewram, (addr & 0x3FFFC) as usize),
             0x03 => rd32(&self.iwram, (addr & 0x7FFC) as usize),
+            0x08..=0x0D if addr & 0x01FF_FF00 != 0 || !self.rtc.readable => self.rom32(addr),
             _ => self.read32_raw(addr),
         }
     }
