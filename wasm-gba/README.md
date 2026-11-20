@@ -85,6 +85,12 @@ overworld save state while walking left and right:
 | Node 26 (V8) | 27.2× | 51.7× | 27.6× | 49.0× |
 | Chrome 151 | 26.5× | 49.7× | 25.9× | 47.3× |
 | Safari 27.0.1 | 26.7× | 52.6× | 27.3× | 51.1× |
+| iPhone 17, Safari (iOS 27.2) | 35.9× | 70.6× | 35.2× | 68.9× |
+
+Phone testing gotcha: Safari only JIT-compiles in secure contexts. Over plain
+`http://<LAN IP>` the iPhone interpreted everything and ran at ~0.7×; use
+`tools/vite-https.config.ts` (HTTPS with a self-signed certificate) or a
+deployed HTTPS build. `jit-check.html` tells the two apart in a second.
 
 Both games busy-wait for VBlank (Emerald at 0x080008C6, FireRed at
 0x080008AA). Idle-loop detection takes the GBA CPU from 100% to ~40% busy
