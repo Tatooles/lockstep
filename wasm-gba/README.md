@@ -1,9 +1,10 @@
-# Lockstep GBA core (spike)
+# Lockstep GBA core
 
 A Game Boy Advance core in Rust, compiled to `wasm32-unknown-unknown` with the
-same small C ABI style as `wasm-core/`. It was written to answer one question:
-is our own core fast enough on a phone for Gen 3 Pokémon? It is not wired into
-the app.
+same small C ABI style as `wasm-core/`. It started as a spike to answer one
+question (is our own core fast enough on a phone for Gen 3 Pokémon?) and now
+runs `.gba` games in the app: `src/gba/session.ts` is the play session and
+`src/ui/GbaPlay.tsx` the screen.
 
 ## What's here
 
@@ -30,8 +31,23 @@ finish the frame), `frame_ptr()` (RGBA), `set_keys(mask)`, `peek8/16/32`,
 an audio ring buffer, `set_time()` for the RTC, `set_render()` (skip drawing,
 e.g. for fast-forward frames nobody sees), and save states: the machine
 struct holds no pointers but the ROM's, so `save_state()`/`load_state()` copy
-its bytes (`state_size()` ≈ 780 KB, including the framebuffer; only loadable by the
-same build).
+its bytes (`state_size()` ≈ 780 KB, including the framebuffer). `Gba.saveState()`
+in `src/gba/gba.ts` puts a 20-byte header in front ("LGBA", `state_version()`, the
+size, the game code) and `loadState()` rejects states from another layout or game
+with a readable error. **Bump `STATE_VERSION` in `src/lib.rs` whenever `Gba`'s
+layout or meaning changes**; the size check alone misses same-size changes.
+
+## In the app
+
+- Audio: the core mixes to a ring of interleaved stereo floats at 32768 Hz;
+  `src/gba/resample.ts` resamples it linearly to the device rate for the shared
+  audio worklet, nudging the rate to hold ~60 ms queued. Sound is off (and the
+  core skips mixing) at 2× and faster, as on the Game Boy path.
+- Fast-forward: only the last frame of each animation frame's batch is drawn.
+- The cartridge clock follows the host clock (`setTime` every second and after
+  loading a state).
+- Flash/SRAM is persisted to IndexedDB every 2 s when dirty; `.sav` import takes
+  the first `save_len()` bytes, so files with an emulator's RTC footer work.
 
 ## Tests
 
@@ -76,8 +92,9 @@ For a real game, put a ROM in `roms/`, drive it to the overworld with
 ## Results on Gen 3 Pokémon (M3 Pro, uncapped, multiples of real time)
 
 Emerald (boots, intro, new game, naming, truck, RTC clock setting, TV scene,
-out to Littleroot) and FireRed (intro, Oak's speech, naming, house, out to
-Pallet Town) both play from power-on with no glitches seen. Benched from an
+out to Littleroot), FireRed (intro, Oak's speech, naming, house, out to
+Pallet Town) and Sapphire (intro, Birch's speech, naming, truck, clock setting,
+TV scene, out to Littleroot) play from power-on with no glitches seen. Benched from an
 overworld save state while walking left and right:
 
 | | Emerald full | Emerald CPU only | FireRed full | FireRed CPU only |
@@ -87,13 +104,16 @@ overworld save state while walking left and right:
 | Safari 27.0.1 | 26.7× | 52.6× | 27.3× | 51.1× |
 | iPhone 17, Safari (iOS 27.2) | 35.9× | 70.6× | 35.2× | 68.9× |
 
+Sapphire in Node 26: 28.8× full, 55.2× CPU only, GBA CPU 36% busy.
+
 Phone testing gotcha: Safari only JIT-compiles in secure contexts. Over plain
 `http://<LAN IP>` the iPhone interpreted everything and ran at ~0.7×; use
 `tools/vite-https.config.ts` (HTTPS with a self-signed certificate) or a
 deployed HTTPS build. `jit-check.html` tells the two apart in a second.
 
-Both games busy-wait for VBlank (Emerald at 0x080008C6, FireRed at
-0x080008AA). Idle-loop detection takes the GBA CPU from 100% to ~40% busy
+Emerald and FireRed busy-wait for VBlank (Emerald at 0x080008C6, FireRed at
+0x080008AA). Sapphire doesn't: its main loop calls VBlankIntrWait (SWI 5 at
+0x081E07B6), so the CPU halts and idle-loop detection isn't involved. Idle-loop detection takes the GBA CPU from 100% to ~40% busy
 and makes the core ~1.7× faster; without it, native speed is ~28–30×.
 Drawing is ~45–49% of frame time and can be skipped on fast-forward frames
 that aren't shown.

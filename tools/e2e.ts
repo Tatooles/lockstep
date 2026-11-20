@@ -1,5 +1,5 @@
 // Browser smoke test on a phone-sized viewport.
-//   node tools/e2e.ts [romPath]
+//   node tools/e2e.ts [romPath]      (a .gb or .gba ROM)
 // Starts the Vite dev server, loads the ROM through the file picker, checks the
 // screen renders and the controls respond, and writes screenshots to tools/out.
 
@@ -83,15 +83,30 @@ try {
       const box = await a.boundingBox();
       check(!!box && box.width > 40, `${vp.name}: A button is reachable (${box?.width}px)`);
       if (box) await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+      if (rom.endsWith('.gba')) {
+        for (const k of ['l', 'r']) {
+          const b = await page.locator(`.pill.shoulder.${k}`).boundingBox();
+          check(!!b && b.width > 40 && b.height > 28, `${vp.name}: ${k.toUpperCase()} button is reachable (${b?.width}x${b?.height}px)`);
+        }
+      }
     }
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     check(!overflow, `${vp.name}: no horizontal overflow`);
     await page.screenshot({ path: join(OUT, `e2e-play-${vp.name}.png`) });
     // Open the panel (always docked on desktop).
-    if (vp.mobile) await page.locator('.pill', { hasText: 'Run' }).click();
+    if (vp.mobile) await page.locator('.pill', { hasText: /^(Run|Menu)$/ }).click();
     await page.waitForSelector('.sheet');
     await page.waitForTimeout(400);
     await page.screenshot({ path: join(OUT, `e2e-sheet-${vp.name}.png`) });
+    if (vp.name === 'portrait' && rom.endsWith('.gba')) {
+      // Save state round trip through IndexedDB.
+      const slot = page.locator('.slot').first();
+      await slot.getByRole('button', { name: 'Save' }).click();
+      await page.getByText('Saved to slot 1.').waitFor({ timeout: 5000 });
+      await slot.getByRole('button', { name: 'Load' }).click();
+      const loaded = await page.getByText('Loaded slot 1.').waitFor({ timeout: 5000 }).then(() => true, () => false);
+      check(loaded, `${vp.name}: save state saves and loads`);
+    }
     if (vp.name === 'desktop') {
       // Settings shows the emulation cost per frame, measured live.
       if (!(await page.locator('.field', { hasText: 'Emulator' }).count())) {

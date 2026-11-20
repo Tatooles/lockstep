@@ -13,19 +13,22 @@ export interface RomRecord {
   name: string;
   title: string;
   version: string | null;
+  /** Absent for Game Boy games (records from before GBA support). */
+  system?: 'gba';
   size: number;
   addedAt: number;
   lastPlayedAt: number;
   data: Uint8Array;
 }
 
-export interface StateRecord {
+/** A save state: SaveState for Game Boy games, the core's bytes (src/gba/gba.ts) for GBA games. */
+export interface StateRecord<S = SaveState> {
   key: string; // `${romKey}:${slot}`
   romKey: string;
   slot: string; // 'resume' | '1' | '2' | '3'
   savedAt: number;
-  state: SaveState;
-  thumb?: Uint8Array; // 160x144 shade indices
+  state: S;
+  thumb?: Uint8Array; // GB: 160x144 shade indices; GBA: 120x80 RGBA
   runId?: string | null;
 }
 
@@ -66,11 +69,11 @@ export const db = {
   getSram: (romKey: string) => tx<Uint8Array | undefined>('sram', 'readonly', (s) => s.get(romKey)),
   putSram: (romKey: string, data: Uint8Array) => tx('sram', 'readwrite', (s) => s.put(data, romKey)),
 
-  getState: (romKey: string, slot: string) => tx<StateRecord | undefined>('states', 'readonly', (s) => s.get(`${romKey}:${slot}`)),
-  putState: (r: StateRecord) => tx('states', 'readwrite', (s) => s.put(r)),
+  getState: <S = SaveState>(romKey: string, slot: string) => tx<StateRecord<S> | undefined>('states', 'readonly', (s) => s.get(`${romKey}:${slot}`)),
+  putState: (r: StateRecord<SaveState | Uint8Array>) => tx('states', 'readwrite', (s) => s.put(r)),
   deleteState: (romKey: string, slot: string) => tx('states', 'readwrite', (s) => s.delete(`${romKey}:${slot}`)),
-  listStates: async (romKey: string) => {
-    const all = await tx<StateRecord[]>('states', 'readonly', (s) => s.getAll());
+  listStates: async <S = SaveState>(romKey: string) => {
+    const all = await tx<StateRecord<S>[]>('states', 'readonly', (s) => s.getAll());
     return all.filter((r) => r.romKey === romKey);
   },
 

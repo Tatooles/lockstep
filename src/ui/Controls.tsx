@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button } from '../core/constants.ts';
-import type { Session } from '../platform/session.ts';
+import { Button, Shoulder } from '../core/constants.ts';
 import { prefs } from './prefs.ts';
+
+/** What the controls drive: a Game Boy or a GBA session. */
+export interface Pad {
+  press(button: number, down: boolean): void;
+  cycleSpeed(): void;
+  setPaused(p: boolean): void;
+  getView(): { paused: boolean };
+}
 
 function buzz(): void {
   if (prefs.get().haptics) navigator.vibrate?.(8);
@@ -15,7 +22,7 @@ const DIR_BUTTON: Record<Exclude<Dir, null>, number> = {
   right: Button.Right,
 };
 
-function DPad({ session }: { session: Session }) {
+function DPad({ session }: { session: Pad }) {
   const ref = useRef<HTMLDivElement>(null);
   const [dir, setDir] = useState<Dir>(null);
   const cur = useRef<Dir>(null);
@@ -84,7 +91,7 @@ function DPad({ session }: { session: Session }) {
   );
 }
 
-function Key({ session, button, className, label }: { session: Session; button: number; className: string; label: string }) {
+function Key({ session, button, className, label }: { session: Pad; button: number; className: string; label: string }) {
   const [down, setDown] = useState(false);
   const release = () => {
     setDown(false);
@@ -130,9 +137,13 @@ const KEYMAP: Record<string, number> = {
   Backspace: Button.Select,
 };
 
-export function useKeyboard(session: Session, enabled: boolean) {
+const SHOULDER_KEYMAP: Record<string, number> = { ...KEYMAP, KeyQ: Shoulder.L, KeyE: Shoulder.R };
+
+export function useKeyboard(session: Pad, enabled: boolean, shoulders = false) {
   useEffect(() => {
     if (!enabled) return;
+    const keymap = shoulders ? SHOULDER_KEYMAP : KEYMAP;
+    const buttons = shoulders ? 10 : 8;
     const isTyping = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
@@ -148,17 +159,17 @@ export function useKeyboard(session: Session, enabled: boolean) {
         session.setPaused(!session.getView().paused);
         return;
       }
-      const b = KEYMAP[e.code];
+      const b = keymap[e.code];
       if (b === undefined) return;
       e.preventDefault();
       session.press(b, true);
     };
     const up = (e: KeyboardEvent) => {
-      const b = KEYMAP[e.code];
+      const b = keymap[e.code];
       if (b !== undefined) session.press(b, false);
     };
     const blur = () => {
-      for (let i = 0; i < 8; i++) session.press(i, false);
+      for (let i = 0; i < buttons; i++) session.press(i, false);
     };
     window.addEventListener('keydown', down);
     window.addEventListener('keyup', up);
@@ -168,14 +179,14 @@ export function useKeyboard(session: Session, enabled: boolean) {
       window.removeEventListener('keyup', up);
       window.removeEventListener('blur', blur);
     };
-  }, [session, enabled]);
+  }, [session, enabled, shoulders]);
 }
 
-/** Standard-mapping gamepads (Bluetooth controllers, etc.). */
-export function useGamepad(session: Session) {
+/** Standard-mapping gamepads (Bluetooth controllers, etc.). With shoulders, L1/R1 are L/R and R2 changes speed. */
+export function useGamepad(session: Pad, shoulders = false) {
   useEffect(() => {
     let raf = 0;
-    const prev = new Array(8).fill(false);
+    const prev = new Array(10).fill(false);
     let ffPrev = false;
     const poll = () => {
       raf = requestAnimationFrame(poll);
@@ -195,25 +206,42 @@ export function useGamepad(session: Session) {
         b(8),
         b(9),
       ];
-      // Button.Right=0, Left=1, Up=2, Down=3, A=4, B=5, Select=6, Start=7
+      // Button.Right=0, Left=1, Up=2, Down=3, A=4, B=5, Select=6, Start=7, then L, R
+      if (shoulders) state.push(b(4), b(5));
       state.forEach((v, i) => {
         if (v !== prev[i]) {
           session.press(i, v);
           prev[i] = v;
         }
       });
-      const ff = b(7) || b(5);
+      const ff = shoulders ? b(7) : b(7) || b(5);
       if (ff && !ffPrev) session.cycleSpeed();
       ffPrev = ff;
     };
     raf = requestAnimationFrame(poll);
     return () => cancelAnimationFrame(raf);
-  }, [session]);
+  }, [session, shoulders]);
 }
 
-export function Controls({ session, speed, onMenu, onGrind }: { session: Session; speed: number; onMenu: () => void; onGrind?: () => void }) {
+interface ControlsProps {
+  session: Pad;
+  speed: number;
+  onMenu: () => void;
+  onGrind?: () => void;
+  /** Show L and R (GBA). */
+  shoulders?: boolean;
+  menuLabel?: string;
+}
+
+export function Controls({ session, speed, onMenu, onGrind, shoulders, menuLabel = 'Run' }: ControlsProps) {
   return (
     <div className="controls">
+      {shoulders && (
+        <div className="shoulders">
+          <Key session={session} button={Shoulder.L} className="pill shoulder l" label="L" />
+          <Key session={session} button={Shoulder.R} className="pill shoulder r" label="R" />
+        </div>
+      )}
       <DPad session={session} />
       <div className="ab">
         <Key session={session} button={Button.B} className="key b" label="B" />
@@ -237,8 +265,8 @@ export function Controls({ session, speed, onMenu, onGrind }: { session: Session
             Grind
           </button>
         )}
-        <button className="pill" onClick={onMenu} aria-label="Open run panel">
-          Run
+        <button className="pill" onClick={onMenu} aria-label={menuLabel === 'Run' ? 'Open run panel' : 'Open menu'}>
+          {menuLabel}
         </button>
       </div>
     </div>

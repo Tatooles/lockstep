@@ -1,7 +1,7 @@
-// Game Boy Advance core (spike): a thin wrapper over the Rust core in
-// wasm-gba/, compiled to lockstep_gba.wasm. Not used by the app yet. The
-// caller compiles the module (Node: readFileSync + new WebAssembly.Module;
-// browser: WebAssembly.compileStreaming) and hands it over.
+// Game Boy Advance core: a thin wrapper over the Rust core in wasm-gba/,
+// compiled to lockstep_gba.wasm. The caller compiles the module (Node:
+// readFileSync + new WebAssembly.Module; browser: src/gba/load.ts) and hands
+// it over.
 
 export const GBA_W = 240;
 export const GBA_H = 160;
@@ -58,12 +58,21 @@ interface Exports {
   audio_write_pos(): number;
   audio_read_pos(): number;
   audio_set_read_pos(p: number): void;
+  state_version(): number;
   state_size(): number;
   state_ptr(): number;
   save_state(): void;
   load_state(): void;
   set_render(enabled: number): void;
 }
+
+/** Floats in the core's audio ring: interleaved stereo at AUDIO_RATE. */
+export const AUDIO_LEN = 16384;
+export const AUDIO_RATE = 32768;
+
+/** Save states start with "LGBA", the core's state version, the machine size and the game's header. */
+const STATE_MAGIC = 0x4142474c;
+const STATE_HEADER = 20;
 
 export const RUN_FRAME_DONE = 0;
 export const RUN_HOOK = 1;
@@ -77,7 +86,10 @@ export class Gba {
   readonly iwram: Uint8Array;
   /** Cartridge save (Flash or SRAM), writable in place. */
   readonly save: Uint8Array;
+  /** The core's audio ring (see AUDIO_LEN). */
+  readonly audioRing: Float32Array;
   readonly x: Exports;
+  private readonly romId: Uint8Array;
 
   static async create(module: WebAssembly.Module, rom: Uint8Array): Promise<Gba> {
     return new Gba(await WebAssembly.instantiate(module, {}), rom);
@@ -98,6 +110,9 @@ export class Gba {
     this.ewram = new Uint8Array(buf, x.ewram_ptr(), 0x40000);
     this.iwram = new Uint8Array(buf, x.iwram_ptr(), 0x8000);
     this.save = new Uint8Array(buf, x.save_ptr(), x.save_len());
+    this.audioRing = new Float32Array(buf, x.audio_ptr(), AUDIO_LEN);
+    // Game code, maker code, version and header checksum.
+    this.romId = Uint8Array.of(...rom.subarray(0xac, 0xb2), rom[0xbc], rom[0xbd]);
     this.setTime(new Date());
   }
 
@@ -186,15 +201,38 @@ export class Gba {
     this.x.reset();
   }
 
-  /** A copy of the whole machine. Only loadable by the same build of the core. */
-  saveState(): Uint8Array {
-    this.x.save_state();
-    return new Uint8Array(this.x.memory.buffer, this.x.state_ptr(), this.x.state_size()).slice();
+  /** Drop queued audio, e.g. after it was off or the game was paused. */
+  discardAudio(): void {
+    this.x.audio_set_read_pos(this.x.audio_write_pos());
   }
 
+  /** A copy of the whole machine, behind a header naming the core version and the game. */
+  saveState(): Uint8Array {
+    const x = this.x;
+    x.save_state();
+    const size = x.state_size();
+    const out = new Uint8Array(STATE_HEADER + size);
+    const dv = new DataView(out.buffer);
+    dv.setUint32(0, STATE_MAGIC, true);
+    dv.setUint32(4, x.state_version(), true);
+    dv.setUint32(8, size, true);
+    out.set(this.romId, 12);
+    out.set(new Uint8Array(x.memory.buffer, x.state_ptr(), size), STATE_HEADER);
+    return out;
+  }
+
+  /** Throws (leaving the machine untouched) if the state is from another core version or game. */
   loadState(state: Uint8Array): void {
-    if (state.length !== this.x.state_size()) throw new Error('Save state is from a different build of the core');
-    new Uint8Array(this.x.memory.buffer, this.x.state_ptr(), state.length).set(state);
-    this.x.load_state();
+    const x = this.x;
+    const size = x.state_size();
+    if (state.length < STATE_HEADER) throw new Error('Not a save state');
+    const dv = new DataView(state.buffer, state.byteOffset, state.byteLength);
+    if (dv.getUint32(0, true) !== STATE_MAGIC) throw new Error('Not a Game Boy Advance save state');
+    if (dv.getUint32(4, true) !== x.state_version() || dv.getUint32(8, true) !== size || state.length !== STATE_HEADER + size) {
+      throw new Error('This save state is from an older version of Lockstep and can no longer be loaded');
+    }
+    if (!this.romId.every((b, i) => b === state[12 + i])) throw new Error('This save state is for a different game');
+    new Uint8Array(x.memory.buffer, x.state_ptr(), size).set(state.subarray(STATE_HEADER));
+    x.load_state();
   }
 }

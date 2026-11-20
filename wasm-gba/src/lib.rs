@@ -1,4 +1,4 @@
-// Lockstep's Game Boy Advance core (spike), compiled to Wasm with a small C ABI
+// Lockstep's Game Boy Advance core, compiled to Wasm with a small C ABI
 // in the same style as wasm-core/. No BIOS image: SWIs are emulated in Rust.
 //
 // Memory is only allocated in `alloc` and `init`. After that nothing grows the
@@ -233,7 +233,17 @@ pub extern "C" fn audio_set_read_pos(p: u32) {
 
 // ---- save states ----
 // A state is the machine's bytes: the struct holds no pointers but the ROM's,
-// which load_state keeps. Only valid for the same build of the core.
+// which load_state keeps. Only valid for the same layout: the host prefixes
+// each state with STATE_VERSION and the size and checks both on load.
+
+/// Bump whenever `Gba`'s layout or meaning changes, so hosts reject states
+/// saved by an older core even when the size happens to match.
+pub const STATE_VERSION: u32 = 1;
+
+#[no_mangle]
+pub extern "C" fn state_version() -> u32 {
+    STATE_VERSION
+}
 
 #[no_mangle]
 pub extern "C" fn state_size() -> u32 {

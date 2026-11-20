@@ -1755,3 +1755,75 @@ select.outcome {
 .mon-card .bars > span:nth-child(even) {
   text-align: right;
 }
+
+/* ---------- Game Boy Advance ---------- */
+.play.gba {
+  grid-template-rows: auto auto 1fr;
+}
+.play.gba .lower {
+  grid-row: 3;
+}
+.play.gba .screen-wrap {
+  width: min(100%, calc((100dvh - 400px) * 3 / 2), 720px);
+  border-radius: 14px;
+}
+.play.gba .screen {
+  aspect-ratio: 240 / 160;
+}
+.play.gba .controls {
+  grid-template-rows: auto 1fr auto;
+}
+.shoulders {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  padding: 0 4px;
+}
+.pill.shoulder {
+  flex: 0 0 96px;
+  height: 34px;
+  font-size: 14px;
+  font-weight: 800;
+}
+.slot canvas.gba {
+  aspect-ratio: 240 / 160;
+}
+@media (orientation: landscape) and (max-height: 560px) {
+  .play.gba {
+    grid-template-rows: auto 1fr auto;
+  }
+  .play.gba .screen-wrap {
+    width: auto;
+    border-radius: 14px;
+  }
+  .shoulders {
+    display: contents;
+  }
+  .pill.shoulder.l,
+  .pill.shoulder.r {
+    width: 96px;
+  }
+  .pill.shoulder.l {
+    grid-column: 1;
+    grid-row: 2;
+    align-self: start;
+    justify-self: start;
+  }
+  .pill.shoulder.r {
+    grid-column: 3;
+    grid-row: 2;
+    align-self: start;
+    justify-self: end;
+  }
+}
+@media (min-width: 1000px) and (min-height: 600px) and (hover: hover) {
+  .play.gba {
+    grid-template-rows: auto auto 1fr;
+  }
+  .play.gba .screen-wrap {
+    width: min(100%, calc((100dvh - 250px) * 3 / 2));
+  }
+  .shoulders {
+    display: none;
+  }
+}
