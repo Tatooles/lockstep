@@ -75,10 +75,24 @@
       // JIT-compiled, both loops take well under 50 ms even on a phone.
       const slow = jsMs > 60 || wasmMs > 60;
       log(slow ? '\nLooks interpreted (no JIT). Lockdown Mode does this.' : '\nJIT is on.');
+      // Features Lockdown Mode turns off, as circumstantial evidence.
+      let webgl = false;
+      try {
+        webgl = !!document.createElement('canvas').getContext('webgl');
+      } catch {}
+      const probes = {
+        webgl,
+        webrtc: typeof RTCPeerConnection === 'function',
+        webAudio: typeof AudioContext === 'function',
+        gamepad: typeof navigator.getGamepads === 'function',
+        speech: 'speechSynthesis' in window,
+        cores: navigator.hardwareConcurrency,
+      };
+      log(`\n${Object.entries(probes).map(([k, v]) => `${k}: ${v}`).join('\n')}`);
       log(`\n${navigator.userAgent}`);
       fetch('/__bench-result', {
         method: 'POST',
-        body: JSON.stringify({ at: new Date().toISOString(), label: 'jit-check', ua: navigator.userAgent, jsMs, wasmMs, full: { speed: 0 }, cpuOnly: { speed: 0 }, graphicsShare: 0 }),
+        body: JSON.stringify({ at: new Date().toISOString(), label: 'jit-check', ua: navigator.userAgent, jsMs, wasmMs, probes, full: { speed: 0 }, cpuOnly: { speed: 0 }, graphicsShare: 0 }),
       }).catch(() => {});
     </script>
   </body>
