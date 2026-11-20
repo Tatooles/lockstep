@@ -72,7 +72,8 @@
       } catch (e) {
         log(`WebAssembly unavailable: ${e.message}`);
       }
-      const slow = jsMs > 400 || wasmMs > 400;
+      // JIT-compiled, both loops take well under 50 ms even on a phone.
+      const slow = jsMs > 60 || wasmMs > 60;
       log(slow ? '\nLooks interpreted (no JIT). Lockdown Mode does this.' : '\nJIT is on.');
       log(`\n${navigator.userAgent}`);
       fetch('/__bench-result', {
