@@ -208,7 +208,7 @@ pub extern "C" fn set_time(unix_local: f64) {
 
 #[no_mangle]
 pub extern "C" fn set_audio(enabled: u32) {
-    gba().sys.apu.output = enabled != 0;
+    gba().sys.set_audio(enabled != 0);
 }
 
 #[no_mangle]

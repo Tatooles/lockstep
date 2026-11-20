@@ -97,8 +97,10 @@ pub struct Sys {
     pub rtc: Rtc,
     pub frame_done: bool,
     pub frames: u32,
-    /// Cycles spent halted (waiting for an interrupt).
+    /// Cycles spent halted or in a detected idle loop.
     pub idle_cycles: u64,
+    /// Skip detected idle loops (see Cpu::idle_check).
+    pub idle_skip: bool,
     /// Draw scanlines (off for CPU-only benchmarking).
     pub render: bool,
 
@@ -170,6 +172,7 @@ impl Sys {
         self.rom = rom;
         self.rom_len = rom_len;
         self.render = true;
+        self.idle_skip = true;
         build_bios(&mut self.bios);
         self.bios_latch = 0xE129_F000;
         self.events = [NEVER; NEV];
@@ -847,12 +850,26 @@ impl Sys {
 
     // ---- APU scheduling ----
 
+    /// Sound output on or off. Off, no sample events run at all (the PSG's length
+    /// counters pause too), which keeps fast-forward and benchmarks cheap.
+    pub fn set_audio(&mut self, on: bool) {
+        self.apu.output = on;
+        self.apu_schedule();
+    }
+
     fn apu_schedule(&mut self) {
-        let period = self.apu.sample_period();
-        self.schedule(EV_APU, period);
+        if self.apu.output {
+            let period = self.apu.sample_period();
+            self.schedule(EV_APU, period);
+        } else {
+            self.cancel(EV_APU);
+        }
     }
 
     fn apu_event(&mut self, at: u64) {
+        if !self.apu.output {
+            return;
+        }
         self.apu.sample(at);
         let period = self.apu.sample_period();
         self.schedule_at(EV_APU, at + period);
@@ -863,7 +880,12 @@ impl Bus for Sys {
     #[inline(always)]
     fn read8(&mut self, addr: u32, seq: bool) -> u32 {
         self.now += self.wait16[seq as usize][((addr >> 24) & 0xF) as usize] as u64;
-        self.read8_raw(addr)
+        match addr >> 24 {
+            0x02 => unsafe { *self.ewram.get_unchecked((addr & 0x3FFFF) as usize) as u32 },
+            0x03 => unsafe { *self.iwram.get_unchecked((addr & 0x7FFF) as usize) as u32 },
+            0x08..=0x0D if addr & 0x01FF_FF00 != 0 || !self.rtc.readable => (self.rom16(addr) >> ((addr & 1) * 8)) & 0xFF,
+            _ => self.read8_raw(addr),
+        }
     }
 
     #[inline(always)]
@@ -893,7 +915,11 @@ impl Bus for Sys {
     #[inline(always)]
     fn write8(&mut self, addr: u32, v: u8, seq: bool) {
         self.now += self.wait16[seq as usize][((addr >> 24) & 0xF) as usize] as u64;
-        self.write8_raw(addr, v);
+        match addr >> 24 {
+            0x02 => unsafe { *self.ewram.get_unchecked_mut((addr & 0x3FFFF) as usize) = v },
+            0x03 => unsafe { *self.iwram.get_unchecked_mut((addr & 0x7FFF) as usize) = v },
+            _ => self.write8_raw(addr, v),
+        }
     }
 
     #[inline(always)]
@@ -976,5 +1002,16 @@ impl Bus for Sys {
 
     fn swi(&mut self, cpu: &mut Cpu, n: u32) -> Swi {
         self.hle_swi(cpu, n)
+    }
+
+    fn peek16(&mut self, addr: u32) -> u32 {
+        self.read16_raw(addr)
+    }
+
+    fn skip_idle(&mut self) {
+        if self.idle_skip && self.now < self.next_event {
+            self.idle_cycles += self.next_event - self.now;
+            self.now = self.next_event;
+        }
     }
 }
