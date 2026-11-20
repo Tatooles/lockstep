@@ -74,7 +74,7 @@
       }
       // JIT-compiled, both loops take well under 50 ms even on a phone.
       const slow = jsMs > 60 || wasmMs > 60;
-      log(slow ? '\nLooks interpreted (no JIT). Lockdown Mode does this.' : '\nJIT is on.');
+      log(slow ? '\nLooks interpreted (no JIT). Safari does this on plain-HTTP LAN pages (use HTTPS) and in Lockdown Mode.' : '\nJIT is on.');
       // Features Lockdown Mode turns off, as circumstantial evidence.
       let webgl = false;
       try {
