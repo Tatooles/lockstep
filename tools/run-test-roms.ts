@@ -5,8 +5,9 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
 import { PNG } from 'pngjs';
-import { GameBoy } from '../src/core/gameboy.ts';
 import { CLOCK_HZ, SCREEN_H, SCREEN_W } from '../src/core/constants.ts';
+import type { GameBoy } from '../src/core/gameboy.ts';
+import { gameBoy } from './core.ts';
 
 const ROOT = join(import.meta.dirname, '..', 'test-roms');
 const OUT = join(import.meta.dirname, 'out');
@@ -50,7 +51,7 @@ function saveFailure(name: string, gb: GameBoy): void {
 function screenshotTest(rom: string, png: string, seconds: number): Result {
   const name = relative(ROOT, rom);
   const t0 = performance.now();
-  const gb = new GameBoy(new Uint8Array(readFileSync(rom)));
+  const gb = gameBoy(new Uint8Array(readFileSync(rom)));
   let serial = '';
   gb.bus.onSerialByte = (b) => {
     serial += String.fromCharCode(b);
@@ -77,7 +78,7 @@ function screenshotTest(rom: string, png: string, seconds: number): Result {
 function mooneyeTest(rom: string): Result {
   const name = relative(ROOT, rom);
   const t0 = performance.now();
-  const gb = new GameBoy(new Uint8Array(readFileSync(rom)));
+  const gb = gameBoy(new Uint8Array(readFileSync(rom)));
   gb.apu.outputEnabled = false;
   const cpu = gb.cpu;
   const limit = gb.bus.mcycles + (CLOCK_HZ / 4) * 20;

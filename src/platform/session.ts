@@ -2,7 +2,8 @@
 
 import { Grinder, type GrindEnd, type GrindProgress } from '../bot/grinder.ts';
 import { FRAME_RATE, SCREEN_H, SCREEN_W } from '../core/constants.ts';
-import { GameBoy } from '../core/gameboy.ts';
+import type { GameBoy } from '../core/gameboy.ts';
+import { createGameBoy } from '../core/load.ts';
 import { nextMilestone, readMilestones, type Milestone } from '../gen1/milestones.ts';
 import { detectVersion, Gen1Data } from '../gen1/rom.ts';
 import { SYMBOLS } from '../gen1/symbols.ts';
@@ -35,6 +36,8 @@ export interface SessionView {
   grind: GrindProgress | null;
   /** Why the last auto-grind stopped, until dismissed. */
   grindEnd: (GrindEnd & { summary: string }) | null;
+  /** Average milliseconds of emulation per Game Boy frame (last second), or null before a sample. */
+  emuMs: number | null;
   rev: number;
 }
 
@@ -83,6 +86,9 @@ export class Session {
   private fpsFrames = 0;
   private fpsAt = 0;
   private fps = 0;
+  private emuTime = 0;
+  private emuFrames = 0;
+  private emuMs: number | null = null;
 
   private toasts: ToastItem[] = [];
   private toastId = 0;
@@ -99,9 +105,9 @@ export class Session {
   private onHide = () => this.handleHide();
   private onVis = () => (document.visibilityState === 'hidden' ? this.handleHide() : this.handleShow());
 
-  private constructor(rom: RomRecord, sram: Uint8Array | undefined) {
+  private constructor(rom: RomRecord, sram: Uint8Array | undefined, gb: GameBoy) {
     this.rom = rom;
-    this.gb = new GameBoy(rom.data);
+    this.gb = gb;
     if (sram && sram.length === this.gb.cart.ram.length) this.gb.cart.ram.set(sram);
     const version = detectVersion(rom.data);
     this.data = version ? new Gen1Data(rom.data, version) : null;
@@ -109,9 +115,8 @@ export class Session {
     this.reader = version ? new Gen1Reader(SYMBOLS[version]) : null;
     const wram = this.gb.bus.wram;
     const bus = this.gb.bus;
-    this.ram = {
-      u8: (a: number) => (a >= 0xc000 && a < 0xe000 ? wram[a - 0xc000] : bus.read(a)),
-    };
+    // Work RAM reads straight from the array; everything else through the bus.
+    this.ram = { u8: (a: number) => (a >= 0xc000 && a < 0xe000 ? wram[a - 0xc000] : bus.read(a)) };
     this.view = this.buildView();
     document.addEventListener('visibilitychange', this.onVis);
     window.addEventListener('pagehide', this.onHide);
@@ -119,7 +124,7 @@ export class Session {
 
   static async open(rom: RomRecord): Promise<Session> {
     const sram = await db.getSram(rom.key);
-    const s = new Session(rom, sram);
+    const s = new Session(rom, sram, await createGameBoy(rom.data));
     const resume = await db.getState(rom.key, 'resume');
     if (resume) {
       try {
@@ -136,6 +141,14 @@ export class Session {
     await db.putRom({ ...rom, lastPlayedAt: Date.now() });
     s.start();
     return s;
+  }
+
+  /** Run one Game Boy frame, timing it for the emulation-cost readout. */
+  private emulateFrame(): void {
+    const t = performance.now();
+    this.gb.runFrame();
+    this.emuTime += performance.now() - t;
+    this.emuFrames++;
   }
 
   // ---- external store for React ----
@@ -161,6 +174,7 @@ export class Session {
       version: this.data?.version ?? null,
       grind: this.grinder ? { ...this.grinder.getProgress() } : null,
       grindEnd: this.grindEnd,
+      emuMs: this.emuMs,
       rev: this.rev,
     };
   }
@@ -242,7 +256,7 @@ export class Session {
     const t0 = performance.now();
     let frames = 0;
     while (this.acc >= FRAME_MS) {
-      this.gb.runFrame();
+      this.emulateFrame();
       this.acc -= FRAME_MS;
       frames++;
       if (++this.frameNo % TRACK_EVERY === 0) this.track();
@@ -261,6 +275,8 @@ export class Session {
       this.fps = Math.round((this.fpsFrames * 1000) / (now - this.fpsAt));
       this.fpsFrames = 0;
       this.fpsAt = now;
+      if (this.emuFrames > 0) this.emuMs = this.emuTime / this.emuFrames;
+      this.emuTime = this.emuFrames = 0;
     }
     if (now - this.publishAt > 250) {
       this.publishAt = now;
@@ -337,7 +353,7 @@ export class Session {
     let frames = 0;
     let end: GrindEnd | null = null;
     while (performance.now() - now < GRIND_BUDGET_MS) {
-      this.gb.runFrame();
+      this.emulateFrame();
       frames++;
       if (++this.frameNo % TRACK_EVERY === 0) this.track();
       end = grinder.step();
@@ -351,6 +367,8 @@ export class Session {
       this.fps = Math.round((this.fpsFrames * 1000) / (now - this.fpsAt));
       this.fpsFrames = 0;
       this.fpsAt = now;
+      if (this.emuFrames > 0) this.emuMs = this.emuTime / this.emuFrames;
+      this.emuTime = this.emuFrames = 0;
     }
     if (end) {
       this.finishGrind(end);
@@ -562,12 +580,8 @@ export class Session {
 
   reset(): void {
     this.stopGrind();
-    // Soft reset: rebuild the machine, keeping battery RAM.
-    const ram = this.gb.cart.ram.slice();
-    const fresh = new GameBoy(this.rom.data);
-    fresh.cart.ram.set(ram);
-    const st = fresh.saveState();
-    this.gb.loadState(st);
+    // Soft reset: power cycle, keeping battery RAM.
+    this.gb.reset();
     this.differ.reset();
   }
 

@@ -92,6 +92,15 @@ try {
     await page.waitForSelector('.sheet');
     await page.waitForTimeout(400);
     await page.screenshot({ path: join(OUT, `e2e-sheet-${vp.name}.png`) });
+    if (vp.name === 'desktop') {
+      // Settings shows the emulation cost per frame, measured live.
+      if (!(await page.locator('.field', { hasText: 'Emulator' }).count())) {
+        await page.getByRole('tab', { name: /^(Run|Settings)$/ }).click();
+      }
+      await page.waitForTimeout(1200);
+      const hint = (await page.locator('.field', { hasText: 'Emulator' }).locator('.hint').textContent()) ?? '';
+      check(/WebAssembly · \d+\.\d\d ms per frame/.test(hint), `desktop: emulation cost is measured ("${hint}")`);
+    }
     check(errors.length === 0, `${vp.name}: no console errors ${errors.join(' | ')}`);
     await ctx.close();
   }

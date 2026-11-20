@@ -23,7 +23,8 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { PNG } from 'pngjs';
 import { Button } from '../src/core/constants.ts';
-import { GameBoy, type SaveState } from '../src/core/gameboy.ts';
+import type { SaveState } from '../src/core/gameboy.ts';
+import { gameBoy } from './core.ts';
 import { readMilestones, nextMilestone } from '../src/gen1/milestones.ts';
 import { detectVersion, Gen1Data } from '../src/gen1/rom.ts';
 import { SYMBOLS } from '../src/gen1/symbols.ts';
@@ -49,7 +50,7 @@ for (let i = 1; i < args.length; i++) {
 }
 
 const rom = new Uint8Array(readFileSync(romPath));
-const gb = new GameBoy(rom);
+const gb = gameBoy(rom);
 gb.apu.outputEnabled = false;
 const version = detectVersion(rom);
 if (!version) throw new Error('not a supported Gen 1 ROM');
@@ -219,7 +220,7 @@ for (const raw of script.split(/[\n;]/)) {
         end = bot.step();
         if (process.env.GRIND_TRACE && frame >= Number(process.env.GRIND_TRACE)) {
           const c = callChain(gb, data.sym);
-          const t = `${classify(c)} ${c.join('<')} btn=${gb.bus.pressed} bank=${gb.cart.currentRomBank} pc=${gb.cpu.pc.toString(16)}`;
+          const t = `${classify(c)} ${c.join('<')} bank=${gb.cart.currentRomBank} pc=${gb.cpu.pc.toString(16)}`;
           if (t !== traceLast) console.log(`[f${frame}] ${t}`);
           traceLast = t;
         }

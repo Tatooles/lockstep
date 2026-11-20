@@ -844,6 +844,14 @@ function RunTab({ session, view, onStartRun, onExit }: { session: Session; view:
       <Toggle label="Sound" checked={!view.muted} onChange={(v) => session.setMuted(!v)} />
       <Toggle label="Pause while this panel is open" checked={p.pauseOnSheet} onChange={(v) => setPref({ pauseOnSheet: v })} />
       <Toggle label="Vibrate on button press" hint="Android only; iPhone browsers don't allow it." checked={p.haptics} onChange={(v) => setPref({ haptics: v })} />
+      <div className="field">
+        <span>
+          <span className="lbl">Emulator</span>
+          <div className="hint">
+            Rust, compiled to WebAssembly{view.emuMs != null && ` · ${view.emuMs.toFixed(2)} ms per frame`}
+          </div>
+        </span>
+      </div>
 
       <h3>In-game save</h3>
       <p className="sub">Back up your .sav file, or bring one from another emulator or a cartridge dump.</p>

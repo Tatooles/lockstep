@@ -39,7 +39,8 @@ are decoded at runtime from the ROM you load, which stays in your browser (Index
 
 | Path | What |
 | --- | --- |
-| `src/core/` | The emulator: SM83 CPU (M-cycle accurate), PPU, APU, timer, MBC1/2/3/5. No dependencies. |
+| `wasm-core/` | The emulator, in Rust: SM83 CPU (M-cycle accurate), PPU, APU, timer, MBC1/2/3/5. Compiled to WebAssembly; no dependencies. |
+| `src/core/` | The built `lockstep_core.wasm`, its TypeScript wrapper (`gameboy.ts`) and loader, and the cartridge header parser. |
 | `src/gen1/` | Gen 1 knowledge: RAM reader and event differ, ROM data reader, pic decompressor, map names. |
 | `src/run/` | Nuzlocke rules engine. Pure functions from game events to run state, unit-tested. |
 | `src/bot/` | Auto-grind: reads which screen the game is on from its call stack, picks battle moves, drives the buttons. |
@@ -56,22 +57,28 @@ pnpm install
 pnpm dev          # http://localhost:5173 (also on your LAN for phone testing)
 pnpm test         # unit tests
 pnpm build        # typecheck + production build
+pnpm wasm         # rebuild src/core/lockstep_core.wasm from wasm-core/ (needs Rust)
 ```
+
+The built `.wasm` is committed, so `pnpm dev`, `pnpm build` and deploys don't need Rust. To change the emulator,
+install [rustup](https://rustup.rs), run `rustup target add wasm32-unknown-unknown`, then `pnpm wasm` after each
+change and check it with the test ROMs below.
 
 ### Conformance and benchmarks
 
 ```sh
 # test ROMs: https://github.com/c-sp/game-boy-test-roms (v7.0), unzipped into ./test-roms
 node tools/run-test-roms.ts [filter]   # blargg, dmg-acid2, mooneye
-node tools/bench.ts                    # frames/sec, headless
+node tools/bench.ts [rom]              # frames/sec, headless
 node tools/pic-roundtrip.ts            # pic decoder vs pret's pkmncompress (needs vendor-data/pictest)
 node tools/e2e.ts [rom]                # phone-viewport browser smoke test
 node tools/play.ts <rom> -e "..."      # scripted headless play to test tracking and auto-grind (commands in its header)
 ```
 
 Current results: blargg `cpu_instrs`, `instr_timing`, `mem_timing`, `mem_timing-2`, `halt_bug` and dmg-acid2 pass;
-`dmg_sound` passes 9 of 12; 84 of 94 DMG-compatible mooneye tests pass. Runs at about 45× real time in Node on an
-M-series Mac.
+`dmg_sound` passes 9 of 12; 84 of 94 DMG-compatible mooneye tests pass. On an M-series Mac it runs at about 80×
+real time in V8 (Chrome, Node) and 55–90× in JavaScriptCore (Safari), roughly twice the speed of the TypeScript
+core it replaced (in git history before the Rust port, with identical output frame for frame).
 
 ## Controls
 

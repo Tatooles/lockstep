@@ -9,3 +9,4 @@ roms
 .vercel
 tools/out
 test-results.json
+wasm-core/target

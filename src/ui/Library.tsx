@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { parseHeader } from '../core/cart.ts';
+import { parseHeader } from '../core/header.ts';
 import { detectVersion } from '../gen1/rom.ts';
 import { db, requestPersistence, romKeyFor, type RomRecord } from '../platform/storage.ts';
 
@@ -28,6 +28,11 @@ export function Library({ onOpen, opening, error }: { onOpen: (r: RomRecord) => 
   useEffect(() => {
     void refresh();
   }, []);
+
+  // Show whichever message is newer: a failed open replaces the import notice.
+  useEffect(() => {
+    if (error) setMsg(null);
+  }, [error]);
 
   const addFile = async (file: File) => {
     setMsg(null);
