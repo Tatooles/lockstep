@@ -147,7 +147,8 @@ pub struct Apu {
 
 #[inline(always)]
 fn reg_index(a: u32) -> usize {
-    ((a - 0x60) >> 1) as usize & 0x27
+    // 0x60..=0xAE map to 0..=0x27, one slot per halfword register.
+    (((a - 0x60) >> 1) as usize).min(0x27)
 }
 
 impl Apu {
