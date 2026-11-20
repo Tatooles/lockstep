@@ -13,3 +13,5 @@ roms
 tools/out
 test-results.json
 wasm-core/target
+wasm-gba/target
+*.gba
