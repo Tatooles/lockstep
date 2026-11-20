@@ -4,7 +4,7 @@
 //   node tools/serve-mgba-bench.ts <path to package/dist> [port]
 // Then open http://<host>:<port>/?rom=emerald&steps=... (see tools/mgba-bench/index.html).
 // mGBA is MPL-2.0; it is not vendored into this repo.
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { networkInterfaces } from 'node:os';
 import { extname, join, normalize } from 'node:path';
@@ -36,6 +36,18 @@ createServer((req, res) => {
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
   res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
   res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  if (req.method === 'POST' && req.url?.startsWith('/__shot?name=')) {
+    // Screenshots for diffing renderers: tools/out/mgba-<name>.png
+    const name = (req.url.split('=')[1] ?? 'shot').replace(/[^\w-]/g, '');
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      mkdirSync(join(root, 'tools', 'out'), { recursive: true });
+      writeFileSync(join(root, 'tools', 'out', `mgba-${name}.png`), Buffer.concat(chunks));
+      res.end('ok');
+    });
+    return;
+  }
   if (req.method === 'POST' && req.url === '/__bench-result') {
     let body = '';
     req.on('data', (c) => (body += c));

@@ -58,6 +58,7 @@
       // ?rom=<name> loads /roms/<name>.gba and /roms/<name>.sav (in-game save).
       // ?steps="N N:Start ..." (same format as tools/gba-play.ts) gets from power-on to gameplay;
       // then it walks left/right with fast-forward and counts frames per second.
+      // ?shots=40,104 instead saves screenshots at those frames (for renderer diffs) and stops.
       import mGBA from '/mgba/mgba.js';
       const params = new URLSearchParams(location.search);
       const name = params.get('rom') ?? 'emerald';
@@ -87,6 +88,8 @@
       Module.setVolume(0);
       Module.setCoreSettings({ audioSync: false, videoSync: false, timestepSync: false, frameSkip: 0 });
 
+      const shots = (params.get('shots') ?? '').split(',').filter(Boolean).map(Number);
+      const shotsDone = [];
       let frame = 0;
       let held = [];
       const hold = (keys) => {
@@ -105,6 +108,11 @@
       Module.addCoreCallbacks({
         videoFrameEndedCallback: () => {
           frame++;
+          if (shots.includes(frame)) {
+            Module.screenshot(`shot-${frame}.png`);
+            const data = Module.FS.readFile(`${paths.screenshotsPath}/shot-${frame}.png`);
+            shotsDone.push(fetch(`/__shot?name=${name}-${frame}`, { method: 'POST', body: data }));
+          }
           if (phase === 'script') {
             if (frame >= stepEnd) {
               stepIdx++;
@@ -128,6 +136,15 @@
       Module.setMainLoopTiming(0, 0);
 
       const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      if (shots.length) {
+        Module.setFastForwardMultiplier(1);
+        while (shotsDone.length < shots.length) await wait(100);
+        await Promise.all(shotsDone);
+        log(`saved ${shots.length} screenshots`);
+        log(`UA: ${navigator.userAgent}`);
+        Module.pauseGame();
+        throw new Error('done');
+      }
       while (phase === 'script') {
         await wait(250);
         out.textContent = lines.join('\n') + `\nscript frame ${frame}`;
