@@ -567,7 +567,7 @@ impl Sys {
             0x0A0..=0x0A7 => self.apu.fifo_write8(a, v),
             _ => {
                 let i = (a >> 1) as usize;
-                let cur = if (0x060..0x0B0).contains(&a) { self.apu.read16(a & !1) } else { self.io[i] };
+                let cur = if (0x060..0x0B0).contains(&a) { self.apu.raw16(a & !1) } else { self.io[i] };
                 let merged = if a & 1 != 0 { (cur & 0xFF) | ((v as u16) << 8) } else { (cur & 0xFF00) | v as u16 };
                 self.io_write16(a & !1, merged);
             }
