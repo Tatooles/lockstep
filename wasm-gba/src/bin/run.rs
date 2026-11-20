@@ -100,6 +100,17 @@ fn main() {
         }
     }
     let secs = t0.elapsed().as_secs_f64();
+    if let Some(n) = arg("--render-only").and_then(|s| s.parse::<u32>().ok()) {
+        // Redraw the current frame n times: the renderer in isolation.
+        let t = Instant::now();
+        for _ in 0..n {
+            for y in 0..160 {
+                g.sys.render_line(y);
+            }
+        }
+        let ms = t.elapsed().as_secs_f64() * 1000.0;
+        println!("render only: {:.3} ms/frame ({:.1} ns/pixel)", ms / n as f64, ms * 1e6 / (n as f64 * 38400.0));
+    }
     if args.iter().any(|a| a == "--bench") {
         let emu = (g.sys.now - c0) as f64 / 16_777_216.0;
         println!(
