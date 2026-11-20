@@ -76,6 +76,8 @@ pub struct Cpu {
     pub pipe: [u32; 2],
     /// Whether the next code fetch is sequential.
     pub seq: bool,
+    /// Instructions executed (counted only with the `stats` feature).
+    pub insns: u64,
 }
 
 // ---- shifter ----
@@ -441,6 +443,7 @@ impl Cpu {
             bank: [[0; 7]; 7],
             pipe: [0xF000_0000; 2],
             seq: false,
+            insns: 0,
         }
     }
 
@@ -599,6 +602,10 @@ impl Cpu {
 
     #[inline(always)]
     pub fn step<B: Bus>(&mut self, bus: &mut B) {
+        #[cfg(feature = "stats")]
+        {
+            self.insns += 1;
+        }
         self.r[15] &= !1;
         let op = self.pipe[0];
         self.pipe[0] = self.pipe[1];

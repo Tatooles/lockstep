@@ -97,6 +97,8 @@ pub struct Sys {
     pub rtc: Rtc,
     pub frame_done: bool,
     pub frames: u32,
+    /// Cycles spent halted (waiting for an interrupt).
+    pub idle_cycles: u64,
     /// Draw scanlines (off for CPU-only benchmarking).
     pub render: bool,
 

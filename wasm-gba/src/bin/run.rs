@@ -66,6 +66,9 @@ fn main() {
     let arg = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
     let rom: &'static [u8] = Box::leak(std::fs::read(path).expect("read rom").into_boxed_slice());
     let mut g = Gba::new_boxed(rom);
+    if args.iter().any(|a| a == "--norender") {
+        g.sys.render = false;
+    }
     // Key script: "frame:mask,frame:mask" (mask stays until the next entry).
     let script: Vec<(u32, u16)> = arg("--keys")
         .map(|s| {
@@ -101,10 +104,21 @@ fn main() {
             emu
         );
     }
+    if g.cpu.insns > 0 {
+        println!("insns {} = {:.1} M/s, {:.2} cycles/insn (busy)", g.cpu.insns, g.cpu.insns as f64 / secs / 1e6, (g.sys.now - g.sys.idle_cycles) as f64 / g.cpu.insns as f64);
+    }
     if args.iter().any(|a| a == "--r12") {
         println!("r12 = {}", g.cpu.r[12]);
     }
-    println!("pc {:08x} cpsr {:08x} halted {} frames {}", g.cpu.next_pc(), g.cpu.get_cpsr(), g.sys.halted, g.sys.frames);
+    println!(
+        "pc {:08x} cpsr {:08x} halted {} frames {} busy {:.0}% vblanks(iwram counter) {}",
+        g.cpu.next_pc(),
+        g.cpu.get_cpsr(),
+        g.sys.halted,
+        g.sys.frames,
+        100.0 - g.sys.idle_cycles as f64 * 100.0 / g.sys.now as f64,
+        u32::from_le_bytes(g.sys.iwram[0x7FF8..0x7FFC].try_into().unwrap())
+    );
     if let Some(p) = arg("--png") {
         if shots.is_empty() {
             std::fs::write(&p, png(240, 160, &g.sys.ppu.frame)).unwrap();
