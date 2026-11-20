@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>JIT Check</title>
+    <style>
+      :root {
+        --bg: #f4f2f7;
+        --fg: #1d1b22;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #16141b;
+          --fg: #ece9f3;
+        }
+      }
+      body {
+        margin: 0;
+        padding: 16px;
+        background: var(--bg);
+        color: var(--fg);
+        font: 16px/1.5 -apple-system, system-ui, sans-serif;
+      }
+      pre {
+        white-space: pre-wrap;
+        font: 14px/1.5 ui-monospace, Menlo, monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>JIT check</h1>
+    <pre id="out">running…</pre>
+    <script type="module">
+      // Times the same tight loop in JavaScript and in WebAssembly. With a JIT
+      // both take tens of milliseconds; interpreted (e.g. Lockdown Mode) they
+      // take seconds. Results are posted to the dev server like the bench.
+      const out = document.getElementById('out');
+      const N = 20_000_000;
+      const lines = [];
+      const log = (s) => {
+        lines.push(s);
+        out.textContent = lines.join('\n');
+      };
+      await new Promise((r) => setTimeout(r, 50));
+      const js = () => {
+        let s = 0;
+        for (let i = 0; i < N; i++) s = (s + i * 7) | 0;
+        return s;
+      };
+      js();
+      let t = performance.now();
+      js();
+      const jsMs = performance.now() - t;
+      log(`JavaScript loop: ${jsMs.toFixed(0)} ms`);
+      // (func (param $n i32) (result i32) acc += i * 7 for i in 0..n)
+      const bytes = new Uint8Array([
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f, 0x03, 0x02, 0x01,
+        0x00, 0x07, 0x05, 0x01, 0x01, 0x66, 0x00, 0x00, 0x0a, 0x28, 0x01, 0x26, 0x01, 0x02, 0x7f, 0x02, 0x40, 0x03, 0x40,
+        0x20, 0x02, 0x20, 0x00, 0x4f, 0x0d, 0x01, 0x20, 0x01, 0x20, 0x02, 0x41, 0x07, 0x6c, 0x6a, 0x21, 0x01, 0x20, 0x02,
+        0x41, 0x01, 0x6a, 0x21, 0x02, 0x0c, 0x00, 0x0b, 0x0b, 0x20, 0x01, 0x0b,
+      ]);
+      let wasmMs = -1;
+      try {
+        const { instance } = await WebAssembly.instantiate(bytes);
+        const f = instance.exports.f;
+        f(N);
+        t = performance.now();
+        const r = f(N);
+        wasmMs = performance.now() - t;
+        log(`WebAssembly loop: ${wasmMs.toFixed(0)} ms ${r === js() ? '' : '(mismatch!)'}`);
+      } catch (e) {
+        log(`WebAssembly unavailable: ${e.message}`);
+      }
+      const slow = jsMs > 400 || wasmMs > 400;
+      log(slow ? '\nLooks interpreted (no JIT). Lockdown Mode does this.' : '\nJIT is on.');
+      log(`\n${navigator.userAgent}`);
+      fetch('/__bench-result', {
+        method: 'POST',
+        body: JSON.stringify({ at: new Date().toISOString(), label: 'jit-check', ua: navigator.userAgent, jsMs, wasmMs, full: { speed: 0 }, cpuOnly: { speed: 0 }, graphicsShare: 0 }),
+      }).catch(() => {});
+    </script>
+  </body>
