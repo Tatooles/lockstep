@@ -1,6 +1,7 @@
 // Scanline renderer. Each visible line is drawn in one go at the start of its
-// HBlank: backgrounds and sprites into line buffers, then windows, priorities
-// and color effects per pixel.
+// HBlank: backgrounds and sprites into line buffers, then the layers are
+// painted back to front (tracking the top two per pixel for blending), then
+// color effects and conversion to RGBA.
 
 use crate::sys::Sys;
 
@@ -23,7 +24,12 @@ pub struct Ppu {
     obj_prio: [u8; W],
     /// bit0 semi-transparent, bit1 inside the OBJ window
     obj_flags: [u8; W],
+    any_semi: bool,
     win: [u8; W],
+    top: [u16; W],
+    top_l: [u8; W],
+    bot: [u16; W],
+    bot_l: [u8; W],
 }
 
 #[inline(always)]
@@ -39,31 +45,66 @@ fn sext28(v: u32) -> i32 {
     ((v << 4) as i32) >> 4
 }
 
+// Color math on 15-bit BGR with the channels spread into 10-bit lanes of a
+// u32 (r | g << 10 | b << 20), so one multiply handles all three.
+const LANES5: u32 = 0x1F | 0x1F << 10 | 0x1F << 20;
+
+#[inline(always)]
+fn spread(c: u16) -> u32 {
+    let c = c as u32;
+    (c & 0x1F) | (c & 0x3E0) << 5 | (c & 0x7C00) << 10
+}
+
+#[inline(always)]
+fn pack(s: u32) -> u16 {
+    ((s & 0x1F) | (s >> 5) & 0x3E0 | (s >> 10) & 0x7C00) as u16
+}
+
 #[inline(always)]
 fn blend(a: u16, b: u16, eva: u32, evb: u32) -> u16 {
-    let ch = |s: u32| -> u32 {
-        let x = ((a as u32 >> s) & 31) * eva + ((b as u32 >> s) & 31) * evb;
-        (x >> 4).min(31)
-    };
-    (ch(0) | ch(5) << 5 | ch(10) << 10) as u16
+    // Each lane is at most 31 * 16 * 2 = 992, so lanes don't overflow.
+    let s = ((spread(a) * eva + spread(b) * evb) >> 4) & (0x3F | 0x3F << 10 | 0x3F << 20);
+    // Saturate lanes above 31.
+    let over = (s >> 5) & (1 | 1 << 10 | 1 << 20);
+    pack((s | over * 31) & LANES5)
 }
 
 #[inline(always)]
 fn brighten(a: u16, evy: u32) -> u16 {
-    let ch = |s: u32| -> u32 {
-        let c = (a as u32 >> s) & 31;
-        c + (((31 - c) * evy) >> 4)
-    };
-    (ch(0) | ch(5) << 5 | ch(10) << 10) as u16
+    let s = spread(a);
+    pack(s + ((((LANES5 - s) * evy) >> 4) & LANES5))
 }
 
 #[inline(always)]
 fn darken(a: u16, evy: u32) -> u16 {
-    let ch = |s: u32| -> u32 {
-        let c = (a as u32 >> s) & 31;
-        c - ((c * evy) >> 4)
-    };
-    (ch(0) | ch(5) << 5 | ch(10) << 10) as u16
+    let s = spread(a);
+    pack(s - (((s * evy) >> 4) & LANES5))
+}
+
+/// Palette entry `i` (0..511; 256+ are sprite colors).
+#[inline(always)]
+fn pal(palette: &[u8; 0x400], i: usize) -> u16 {
+    let i = (i & 0x1FF) * 2;
+    unsafe { core::ptr::read_unaligned(palette.as_ptr().add(i) as *const u16) & 0x7FFF }
+}
+
+/// VRAM reads at indices the caller has masked into range (< 0x18000).
+#[inline(always)]
+fn v8(vram: &[u8; 0x18000], a: usize) -> u8 {
+    debug_assert!(a < 0x18000);
+    unsafe { *vram.get_unchecked(a) }
+}
+
+#[inline(always)]
+fn v16(vram: &[u8; 0x18000], a: usize) -> u16 {
+    debug_assert!(a + 1 < 0x18000);
+    unsafe { core::ptr::read_unaligned(vram.as_ptr().add(a) as *const u16) }
+}
+
+#[inline(always)]
+fn v32(vram: &[u8; 0x18000], a: usize) -> u32 {
+    debug_assert!(a + 3 < 0x18000);
+    unsafe { core::ptr::read_unaligned(vram.as_ptr().add(a) as *const u32) }
 }
 
 const OBJ_SIZES: [[(u32, u32); 4]; 3] = [
@@ -98,16 +139,6 @@ impl Ppu {
 }
 
 impl Sys {
-    #[inline(always)]
-    fn pal(&self, i: usize) -> u16 {
-        u16::from_le_bytes([self.palette[i * 2 & 0x3FF], self.palette[(i * 2 + 1) & 0x3FF]]) & 0x7FFF
-    }
-
-    #[inline(always)]
-    fn vram16(&self, a: usize) -> u16 {
-        u16::from_le_bytes([self.vram[a], self.vram[a + 1]])
-    }
-
     pub fn render_line(&mut self, y: u32) {
         let dispcnt = self.io[0];
         let row = y as usize * W;
@@ -136,10 +167,10 @@ impl Sys {
                 1 | 2 => self.render_affine(i),
                 _ => self.render_bitmap(mode),
             }
-            self.apply_mosaic(i, y);
+            self.apply_mosaic(i);
         }
-        let obj_on = enabled & 0x10 != 0;
-        if obj_on || dispcnt & 0x8000 != 0 {
+        self.ppu.any_semi = false;
+        if enabled & 0x10 != 0 || dispcnt & 0x8000 != 0 {
             self.render_obj(y, mode >= 3);
         }
         self.compose(y, enabled);
@@ -154,7 +185,7 @@ impl Sys {
         self.ppu.refs[3] = self.ppu.refs[3].wrapping_add(self.io[0x36 >> 1] as i16 as i32);
     }
 
-    fn apply_mosaic(&mut self, i: usize, _y: u32) {
+    fn apply_mosaic(&mut self, i: usize) {
         let cnt = self.io[4 + i];
         if cnt & 0x40 == 0 {
             return;
@@ -188,42 +219,54 @@ impl Sys {
         let block_y = if ty >= 256 { if size & 1 != 0 { 2 } else { 1 } } else { 0 };
         let map_row = screen_base + ((ty as usize >> 3) & 31) * 64;
 
-        let mut line = [TRANSPARENT; W];
+        let vram = &self.vram;
+        let palette = &self.palette;
+        let line = &mut self.ppu.bg[i];
+        line.fill(TRANSPARENT);
         let mut x = 0usize;
-        let mut tx = (hofs) & wmask;
+        let mut tx = hofs & wmask;
         while x < W {
             let block = block_y + (tx >> 8) as usize;
-            let map_addr = map_row + block * 0x800 + ((tx as usize >> 3) & 31) * 2;
-            let entry = self.vram16(map_addr & 0xFFFF);
+            let map_addr = (map_row + block * 0x800 + ((tx as usize >> 3) & 31) * 2) & 0xFFFE;
+            let entry = v16(vram, map_addr);
             let tile = (entry & 0x3FF) as usize;
-            let hflip = entry & 0x400 != 0;
-            let vflip = entry & 0x800 != 0;
-            let row = if vflip { 7 - (ty & 7) } else { ty & 7 } as usize;
+            let row = if entry & 0x800 != 0 { 7 - (ty & 7) } else { ty & 7 } as usize;
             let start = (tx & 7) as usize;
             let n = (8 - start).min(W - x);
+            let out = &mut line[x..x + n];
             if bpp8 {
                 let addr = char_base + tile * 64 + row * 8;
                 if addr + 8 <= 0x10000 {
-                    for k in 0..n {
-                        let col = start + k;
-                        let col = if hflip { 7 - col } else { col };
-                        let p = self.vram[addr + col];
-                        if p != 0 {
-                            line[x + k] = self.pal(p as usize);
+                    let mut bits = v32(vram, addr) as u64 | (v32(vram, addr + 4) as u64) << 32;
+                    if entry & 0x400 != 0 {
+                        bits = bits.swap_bytes();
+                    }
+                    bits >>= start * 8;
+                    if bits != 0 {
+                        for (k, px) in out.iter_mut().enumerate() {
+                            let p = (bits >> (k * 8)) as u8;
+                            if p != 0 {
+                                *px = pal(palette, p as usize);
+                            }
                         }
                     }
                 }
             } else {
                 let addr = char_base + tile * 32 + row * 4;
-                let pal = ((entry >> 12) as usize) << 4;
                 if addr + 4 <= 0x10000 {
-                    let bits = u32::from_le_bytes([self.vram[addr], self.vram[addr + 1], self.vram[addr + 2], self.vram[addr + 3]]);
-                    for k in 0..n {
-                        let col = start + k;
-                        let col = if hflip { 7 - col } else { col };
-                        let p = (bits >> (col * 4)) & 0xF;
-                        if p != 0 {
-                            line[x + k] = self.pal(pal | p as usize);
+                    let mut bits = v32(vram, addr);
+                    if entry & 0x400 != 0 {
+                        bits = bits.swap_bytes();
+                        bits = ((bits & 0x0F0F_0F0F) << 4) | ((bits >> 4) & 0x0F0F_0F0F);
+                    }
+                    bits >>= start * 4;
+                    if bits != 0 {
+                        let pb = ((entry >> 12) as usize) << 4;
+                        for (k, px) in out.iter_mut().enumerate() {
+                            let p = (bits >> (k * 4)) & 0xF;
+                            if p != 0 {
+                                *px = pal(palette, pb | p as usize);
+                            }
                         }
                     }
                 }
@@ -231,7 +274,6 @@ impl Sys {
             x += n;
             tx = (tx + n as u32) & wmask;
         }
-        self.ppu.bg[i] = line;
     }
 
     fn render_affine(&mut self, i: usize) {
@@ -245,7 +287,9 @@ impl Sys {
         let size = 128i32 << (cnt >> 14);
         let tiles = (size >> 3) as usize;
         let wrap = cnt & 0x2000 != 0;
-        let mut line = [TRANSPARENT; W];
+        let vram = &self.vram;
+        let palette = &self.palette;
+        let line = &mut self.ppu.bg[i];
         for px in line.iter_mut() {
             let mut tx = x >> 8;
             let mut ty = y >> 8;
@@ -255,16 +299,14 @@ impl Sys {
                 tx &= size - 1;
                 ty &= size - 1;
             } else if tx < 0 || ty < 0 || tx >= size || ty >= size {
+                *px = TRANSPARENT;
                 continue;
             }
             let (tx, ty) = (tx as usize, ty as usize);
-            let tile = self.vram[(screen_base + (ty >> 3) * tiles + (tx >> 3)) & 0xFFFF] as usize;
-            let c = self.vram[(char_base + tile * 64 + (ty & 7) * 8 + (tx & 7)) & 0xFFFF];
-            if c != 0 {
-                *px = self.pal(c as usize);
-            }
+            let tile = v8(vram, (screen_base + (ty >> 3) * tiles + (tx >> 3)) & 0xFFFF) as usize;
+            let c = v8(vram, (char_base + tile * 64 + (ty & 7) * 8 + (tx & 7)) & 0xFFFF);
+            *px = if c != 0 { pal(palette, c as usize) } else { TRANSPARENT };
         }
-        self.ppu.bg[i] = line;
     }
 
     fn render_bitmap(&mut self, mode: u16) {
@@ -272,66 +314,68 @@ impl Sys {
         let pc = self.io[0x24 >> 1] as i16 as i32;
         let (mut x, mut y) = (self.ppu.refs[0], self.ppu.refs[1]);
         let page = if self.io[0] & 0x10 != 0 { 0xA000 } else { 0 };
-        let mut line = [TRANSPARENT; W];
+        let vram = &self.vram;
+        let palette = &self.palette;
+        let line = &mut self.ppu.bg[2];
         for px in line.iter_mut() {
             let tx = x >> 8;
             let ty = y >> 8;
             x = x.wrapping_add(pa);
             y = y.wrapping_add(pc);
+            *px = TRANSPARENT;
             match mode {
                 3 => {
                     if (0..240).contains(&tx) && (0..160).contains(&ty) {
-                        *px = self.vram16((ty as usize * 240 + tx as usize) * 2) & 0x7FFF;
+                        *px = v16(vram, (ty as usize * 240 + tx as usize) * 2) & 0x7FFF;
                     }
                 }
                 4 => {
                     if (0..240).contains(&tx) && (0..160).contains(&ty) {
-                        let c = self.vram[page + ty as usize * 240 + tx as usize];
+                        let c = v8(vram, page + ty as usize * 240 + tx as usize);
                         if c != 0 {
-                            *px = self.pal(c as usize);
+                            *px = pal(palette, c as usize);
                         }
                     }
                 }
                 _ => {
                     if (0..160).contains(&tx) && (0..128).contains(&ty) {
-                        *px = self.vram16(page + (ty as usize * 160 + tx as usize) * 2) & 0x7FFF;
+                        *px = v16(vram, page + (ty as usize * 160 + tx as usize) * 2) & 0x7FFF;
                     }
                 }
             }
         }
-        self.ppu.bg[2] = line;
     }
 
     fn render_obj(&mut self, y: u32, bitmap: bool) {
-        self.ppu.obj.fill(TRANSPARENT);
-        self.ppu.obj_prio.fill(4);
-        self.ppu.obj_flags.fill(0);
+        let ppu = &mut self.ppu;
+        ppu.obj.fill(TRANSPARENT);
+        ppu.obj_prio.fill(4);
+        ppu.obj_flags.fill(0);
         let one_d = self.io[0] & 0x40 != 0;
-        let oam16 = |s: &Sys, a: usize| u16::from_le_bytes([s.oam[a], s.oam[a + 1]]);
+        let oam = &self.oam;
+        let vram = &self.vram;
+        let palette = &self.palette;
+        let oam16 = |a: usize| u16::from_le_bytes([oam[a & 0x3FF], oam[(a + 1) & 0x3FF]]);
         for i in 0..128 {
-            let a0 = oam16(self, i * 8);
+            let a0 = oam16(i * 8);
             let affine = a0 & 0x100 != 0;
             if !affine && a0 & 0x200 != 0 {
                 continue;
             }
             let mode = (a0 >> 10) & 3;
-            if mode == 3 {
-                continue;
-            }
             let shape = (a0 >> 14) as usize;
-            if shape == 3 {
+            if mode == 3 || shape == 3 {
                 continue;
             }
-            let a1 = oam16(self, i * 8 + 2);
-            let a2 = oam16(self, i * 8 + 4);
+            let a1 = oam16(i * 8 + 2);
             let (w, h) = OBJ_SIZES[shape][(a1 >> 14) as usize];
             let double = affine && a0 & 0x200 != 0;
             let (bw, bh) = if double { (w * 2, h * 2) } else { (w, h) };
-            let sy = (a0 & 0xFF) as u32;
-            let dy = (y.wrapping_sub(sy)) & 0xFF;
+            let dy = (y.wrapping_sub((a0 & 0xFF) as u32)) & 0xFF;
             if dy >= bh {
                 continue;
             }
+            let a2 = oam16(i * 8 + 4);
             let mut sx = (a1 & 0x1FF) as i32;
             if sx >= 240 {
                 sx -= 512;
@@ -342,73 +386,81 @@ impl Sys {
             }
             let prio = ((a2 >> 10) & 3) as u8;
             let bpp8 = a0 & 0x2000 != 0;
-            let pal = ((a2 >> 12) as usize) << 4;
+            let pb = 0x100 | (((a2 >> 12) as usize) << 4);
             let stride = if one_d { if bpp8 { w / 8 * 2 } else { w / 8 } } else { 32 };
-            let (pa, pb, pc, pd) = if affine {
-                let g = ((a1 >> 9) & 0x1F) as usize * 32;
-                (
-                    oam16(self, g + 6) as i16 as i32,
-                    oam16(self, g + 14) as i16 as i32,
-                    oam16(self, g + 22) as i16 as i32,
-                    oam16(self, g + 30) as i16 as i32,
-                )
-            } else {
-                (0, 0, 0, 0)
-            };
-            let hflip = !affine && a1 & 0x1000 != 0;
-            let vflip = !affine && a1 & 0x2000 != 0;
-            for bx in 0..bw as i32 {
-                let px = sx + bx;
-                if !(0..240).contains(&px) {
-                    continue;
+            let semi = (mode == 1) as u8;
+            if semi != 0 {
+                ppu.any_semi = true;
+            }
+            // Texel (tx, ty) of this sprite -> color index (0 = transparent).
+            let texel = |tx: u32, ty: u32| -> usize {
+                if bpp8 {
+                    let t = ((tile & !1) + (ty >> 3) * stride + (tx >> 3) * 2) & 0x3FF;
+                    v8(vram, 0x10000 + (t as usize) * 32 + (ty as usize & 7) * 8 + (tx as usize & 7)) as usize
+                } else {
+                    let t = (tile + (ty >> 3) * stride + (tx >> 3)) & 0x3FF;
+                    let b = v8(vram, 0x10000 + (t as usize) * 32 + (ty as usize & 7) * 4 + (tx as usize & 7) / 2);
+                    (if tx & 1 != 0 { b >> 4 } else { b & 0xF }) as usize
                 }
-                let (tx, ty) = if affine {
-                    let rx = bx - bw as i32 / 2;
-                    let ry = dy as i32 - bh as i32 / 2;
-                    let tx = ((pa * rx + pb * ry) >> 8) + w as i32 / 2;
+            };
+            let x0 = (-sx).max(0) as u32;
+            let x1 = (240 - sx).min(bw as i32).max(0) as u32;
+            if affine {
+                let g = ((a1 >> 9) & 0x1F) as usize * 32;
+                let pa = oam16(g + 6) as i16 as i32;
+                let pb_ = oam16(g + 14) as i16 as i32;
+                let pc = oam16(g + 22) as i16 as i32;
+                let pd = oam16(g + 30) as i16 as i32;
+                let ry = dy as i32 - bh as i32 / 2;
+                for bx in x0..x1 {
+                    let rx = bx as i32 - bw as i32 / 2;
+                    let tx = ((pa * rx + pb_ * ry) >> 8) + w as i32 / 2;
                     let ty = ((pc * rx + pd * ry) >> 8) + h as i32 / 2;
                     if tx < 0 || ty < 0 || tx >= w as i32 || ty >= h as i32 {
                         continue;
                     }
-                    (tx as u32, ty as u32)
-                } else {
-                    (if hflip { w - 1 - bx as u32 } else { bx as u32 }, if vflip { h - 1 - dy } else { dy })
-                };
-                let idx = if bpp8 {
-                    let t = ((tile & !1) + (ty >> 3) * stride + (tx >> 3) * 2) & 0x3FF;
-                    let c = self.vram[0x10000 + (t as usize) * 32 + (ty as usize & 7) * 8 + (tx as usize & 7)];
+                    let c = texel(tx as u32, ty as u32);
                     if c == 0 {
                         continue;
                     }
-                    c as usize
-                } else {
-                    let t = (tile + (ty >> 3) * stride + (tx >> 3)) & 0x3FF;
-                    let b = self.vram[0x10000 + (t as usize) * 32 + (ty as usize & 7) * 4 + (tx as usize & 7) / 2];
-                    let c = if tx & 1 != 0 { b >> 4 } else { b & 0xF };
+                    let px = (sx + bx as i32) as usize;
+                    if mode == 2 {
+                        ppu.obj_flags[px] |= 2;
+                    } else if ppu.obj[px] == TRANSPARENT || prio < ppu.obj_prio[px] {
+                        ppu.obj[px] = pal(palette, if bpp8 { 0x100 | c } else { pb | c });
+                        ppu.obj_prio[px] = prio;
+                        ppu.obj_flags[px] = (ppu.obj_flags[px] & 2) | semi;
+                    }
+                }
+            } else {
+                let ty = if a1 & 0x2000 != 0 { h - 1 - dy } else { dy };
+                let hflip = a1 & 0x1000 != 0;
+                for bx in x0..x1 {
+                    let tx = if hflip { w - 1 - bx } else { bx };
+                    let c = texel(tx, ty);
                     if c == 0 {
                         continue;
                     }
-                    pal | c as usize
-                };
-                let px = px as usize;
-                if mode == 2 {
-                    self.ppu.obj_flags[px] |= 2;
-                    continue;
+                    let px = (sx + bx as i32) as usize;
+                    if mode == 2 {
+                        ppu.obj_flags[px] |= 2;
+                    } else if ppu.obj[px] == TRANSPARENT || prio < ppu.obj_prio[px] {
+                        ppu.obj[px] = pal(palette, if bpp8 { 0x100 | c } else { pb | c });
+                        ppu.obj_prio[px] = prio;
+                        ppu.obj_flags[px] = (ppu.obj_flags[px] & 2) | semi;
+                    }
                 }
-                if self.ppu.obj[px] != TRANSPARENT && prio >= self.ppu.obj_prio[px] {
-                    continue;
-                }
-                self.ppu.obj[px] = self.pal(0x100 + idx);
-                self.ppu.obj_prio[px] = prio;
-                self.ppu.obj_flags[px] = (self.ppu.obj_flags[px] & 2) | (mode == 1) as u8;
             }
         }
     }
 
-    fn compute_windows(&mut self, y: u32) -> bool {
+    /// Fill `win` with the enabled-layer mask per pixel (all layers when no
+    /// window is on).
+    fn compute_windows(&mut self, y: u32) {
         let dispcnt = self.io[0];
         if dispcnt & 0xE000 == 0 {
-            return false;
+            self.ppu.win.fill(0x3F);
+            return;
         }
         let winin = self.io[0x48 >> 1];
         let winout = self.io[0x4A >> 1];
@@ -428,103 +480,115 @@ impl Sys {
             }
             let hv = self.io[(0x40 >> 1) + w];
             let vv = self.io[(0x44 >> 1) + w];
-            let (x1, x2) = ((hv >> 8) as u32, (hv & 0xFF) as u32);
+            let (x1, x2) = ((hv >> 8) as usize, (hv & 0xFF) as usize);
             let (y1, y2) = ((vv >> 8) as u32, (vv & 0xFF) as u32);
             let inside_y = if y1 <= y2 { y >= y1 && y < y2 } else { y >= y1 || y < y2 };
             if !inside_y {
                 continue;
             }
             let bits = ((winin >> (w * 8)) & 0x3F) as u8;
-            for x in 0..W as u32 {
-                let inside = if x1 <= x2 { x >= x1 && x < x2 } else { x >= x1 || x < x2 };
-                if inside {
-                    self.ppu.win[x as usize] = bits;
-                }
+            if x1 <= x2 {
+                self.ppu.win[x1.min(W)..x2.min(W)].fill(bits);
+            } else {
+                self.ppu.win[x1.min(W)..].fill(bits);
+                self.ppu.win[..x2.min(W)].fill(bits);
             }
         }
-        true
     }
 
     fn compose(&mut self, y: u32, enabled: u8) {
-        let windows = self.compute_windows(y);
-        let bldcnt = self.io[0x50 >> 1];
+        self.compute_windows(y);
+        let bldcnt = self.io[0x50 >> 1] as u32;
         let effect = (bldcnt >> 6) & 3;
-        let alpha = self.io[0x52 >> 1];
-        let eva = ((alpha & 0x1F) as u32).min(16);
-        let evb = (((alpha >> 8) & 0x1F) as u32).min(16);
-        let evy = ((self.io[0x54 >> 1] & 0x1F) as u32).min(16);
-        let backdrop = self.pal(0);
+        let backdrop = pal(&self.palette, 0);
+        let ppu = &mut self.ppu;
+        // Track the top two layers only when something blends.
+        let two = effect != 0 || ppu.any_semi;
+        ppu.top.fill(backdrop);
+        if two {
+            ppu.top_l.fill(LAYER_BD);
+            ppu.bot.fill(backdrop);
+            ppu.bot_l.fill(LAYER_BD);
+        }
 
-        // Layer order: for each priority, OBJ first, then BGs by index.
-        let mut order = [0u8; 8];
-        let mut n = 0;
-        for p in 0..4u16 {
-            if enabled & 0x10 != 0 {
-                order[n] = LAYER_OBJ | ((p as u8) << 4);
-                n += 1;
+        // Paint back to front: per priority, BGs by descending index, then OBJ.
+        // Branch-free bodies so the loops vectorize.
+        for p in (0..4u16).rev() {
+            for i in (0..4usize).rev() {
+                if enabled & (1 << i) == 0 || self.io[4 + i] & 3 != p {
+                    continue;
+                }
+                let bit = 1u8 << i;
+                let src = &ppu.bg[i];
+                if two {
+                    for x in 0..W {
+                        let c = src[x];
+                        let vis = c != TRANSPARENT && ppu.win[x] & bit != 0;
+                        let (t, tl) = (ppu.top[x], ppu.top_l[x]);
+                        ppu.bot[x] = if vis { t } else { ppu.bot[x] };
+                        ppu.bot_l[x] = if vis { tl } else { ppu.bot_l[x] };
+                        ppu.top_l[x] = if vis { i as u8 } else { tl };
+                        ppu.top[x] = if vis { c } else { t };
+                    }
+                } else {
+                    for x in 0..W {
+                        let c = src[x];
+                        let vis = c != TRANSPARENT && ppu.win[x] & bit != 0;
+                        ppu.top[x] = if vis { c } else { ppu.top[x] };
+                    }
+                }
             }
-            for i in 0..4 {
-                if enabled & (1 << i) != 0 && self.io[4 + i] & 3 == p {
-                    order[n] = i as u8;
-                    n += 1;
+            if enabled & 0x10 != 0 {
+                let p = p as u8;
+                if two {
+                    for x in 0..W {
+                        let c = ppu.obj[x];
+                        let vis = c != TRANSPARENT && ppu.obj_prio[x] == p && ppu.win[x] & 0x10 != 0;
+                        let (t, tl) = (ppu.top[x], ppu.top_l[x]);
+                        ppu.bot[x] = if vis { t } else { ppu.bot[x] };
+                        ppu.bot_l[x] = if vis { tl } else { ppu.bot_l[x] };
+                        ppu.top_l[x] = if vis { LAYER_OBJ } else { tl };
+                        ppu.top[x] = if vis { c } else { t };
+                    }
+                } else {
+                    for x in 0..W {
+                        let c = ppu.obj[x];
+                        let vis = c != TRANSPARENT && ppu.obj_prio[x] == p && ppu.win[x] & 0x10 != 0;
+                        ppu.top[x] = if vis { c } else { ppu.top[x] };
+                    }
                 }
             }
         }
-        let order = &order[..n];
-        let row = y as usize * W;
-        let simple = !windows && effect == 0;
 
-        for x in 0..W {
-            let mask = if windows { self.ppu.win[x] } else { 0x3F };
-            let mut top = backdrop;
-            let mut top_layer = LAYER_BD;
-            let mut second = backdrop;
-            let mut second_layer = LAYER_BD;
-            let mut found = 0;
-            for &l in order {
-                let (layer, c) = if l & 0xF == LAYER_OBJ {
-                    let c = self.ppu.obj[x];
-                    if c == TRANSPARENT || self.ppu.obj_prio[x] != l >> 4 || mask & 0x10 == 0 {
-                        continue;
-                    }
-                    (LAYER_OBJ, c)
-                } else {
-                    let c = self.ppu.bg[l as usize][x];
-                    if c == TRANSPARENT || mask & (1 << l) == 0 {
-                        continue;
-                    }
-                    (l, c)
-                };
-                if found == 0 {
-                    top = c;
-                    top_layer = layer;
-                    found = 1;
-                    if simple && !(layer == LAYER_OBJ && self.ppu.obj_flags[x] & 1 != 0) {
-                        break;
-                    }
-                } else {
-                    second = c;
-                    second_layer = layer;
-                    break;
-                }
-            }
-            let mut out = top;
-            if !simple || (top_layer == LAYER_OBJ && self.ppu.obj_flags[x] & 1 != 0) {
-                let semi = top_layer == LAYER_OBJ && self.ppu.obj_flags[x] & 1 != 0;
-                let first_t = bldcnt & (1 << top_layer) != 0;
-                let second_t = bldcnt & (1 << (8 + second_layer)) != 0;
-                if semi && second_t {
-                    out = blend(top, second, eva, evb);
-                } else if mask & 0x20 != 0 && first_t {
-                    out = match effect {
-                        1 if second_t => blend(top, second, eva, evb),
+        if two {
+            let alpha = self.io[0x52 >> 1];
+            let eva = ((alpha & 0x1F) as u32).min(16);
+            let evb = (((alpha >> 8) & 0x1F) as u32).min(16);
+            let evy = ((self.io[0x54 >> 1] & 0x1F) as u32).min(16);
+            for x in 0..W {
+                let top = ppu.top[x];
+                let tl = ppu.top_l[x] as u32;
+                let second_t = (bldcnt >> (8 + ppu.bot_l[x] as u32)) & 1 != 0;
+                let semi = tl == LAYER_OBJ as u32 && ppu.obj_flags[x] & 1 != 0;
+                let first_t = ppu.win[x] & 0x20 != 0 && (bldcnt >> tl) & 1 != 0;
+                ppu.top[x] = if semi && second_t {
+                    blend(top, ppu.bot[x], eva, evb)
+                } else if first_t {
+                    match effect {
+                        1 if second_t => blend(top, ppu.bot[x], eva, evb),
                         2 => brighten(top, evy),
                         3 => darken(top, evy),
                         _ => top,
-                    };
-                }
+                    }
+                } else {
+                    top
+                };
             }
-            self.ppu.frame[row + x] = rgba(out);
+        }
+        let row = y as usize * W;
+        let out = &mut ppu.frame[row..row + W];
+        for x in 0..W {
+            out[x] = rgba(ppu.top[x]);
         }
     }
 }

@@ -96,6 +96,7 @@ impl Gba {
         loop {
             if self.sys.halted {
                 if self.sys.now < self.sys.next_event {
+                    self.sys.idle_cycles += self.sys.next_event - self.sys.now;
                     self.sys.now = self.sys.next_event;
                 }
             } else if self.hooks.n == 0 {

@@ -269,3 +269,9 @@ pub extern "C" fn load_state() {
 pub extern "C" fn set_render(enabled: u32) {
     gba().sys.render = enabled != 0;
 }
+
+/// Cycles the CPU has spent halted since power-on (compare with `cycles`).
+#[no_mangle]
+pub extern "C" fn idle_cycles() -> f64 {
+    gba().sys.idle_cycles as f64
+}
