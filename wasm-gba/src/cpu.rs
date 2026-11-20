@@ -709,6 +709,7 @@ impl Cpu {
 
     // ---- ARM ----
 
+    #[inline(always)]
     fn exec_arm<B: Bus>(&mut self, bus: &mut B, op: u32) {
         let idx = (((op >> 16) & 0xFF0) | ((op >> 4) & 0xF)) as usize;
         match ARM_TABLE[idx] {
