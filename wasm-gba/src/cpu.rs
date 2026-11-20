@@ -22,6 +22,13 @@ pub trait Bus {
     fn idle(&mut self);
     /// High-level BIOS hook for SWI `n`.
     fn swi(&mut self, cpu: &mut Cpu, n: u32) -> Swi;
+    /// Side-effect-free halfword read, for code analysis.
+    fn peek16(&mut self, _addr: u32) -> u32 {
+        0
+    }
+    /// The CPU is spinning in a loop that cannot make progress before the next
+    /// event: jump ahead to it.
+    fn skip_idle(&mut self) {}
 }
 
 pub enum Swi {
@@ -76,6 +83,11 @@ pub struct Cpu {
     pub pipe: [u32; 2],
     /// Whether the next code fetch is sequential.
     pub seq: bool,
+    // Idle-loop detection (see idle_check).
+    idle_pc: u32,
+    idle_pure: bool,
+    idle_seen: bool,
+    idle_snap: [u32; 16],
     /// Instructions executed (counted only with the `stats` feature).
     pub insns: u64,
 }
@@ -443,6 +455,10 @@ impl Cpu {
             bank: [[0; 7]; 7],
             pipe: [0xF000_0000; 2],
             seq: false,
+            idle_pc: 0,
+            idle_pure: false,
+            idle_seen: false,
+            idle_snap: [0; 16],
             insns: 0,
         }
     }
@@ -1353,6 +1369,9 @@ impl Cpu {
             T_BCC => {
                 if self.check((op >> 8) & 0xF) {
                     let off = ((op << 24) as i32 >> 23) as u32;
+                    if (off as i32) < 0 && (off as i32) >= -64 {
+                        self.idle_check(bus, self.r[15].wrapping_sub(4), self.r[15].wrapping_add(off));
+                    }
                     self.r[15] = self.r[15].wrapping_add(off);
                     self.reload16(bus);
                 } else {
@@ -1377,6 +1396,9 @@ impl Cpu {
             },
             T_B => {
                 let off = ((op << 21) as i32 >> 20) as u32;
+                if (off as i32) < 0 && (off as i32) >= -64 {
+                    self.idle_check(bus, self.r[15].wrapping_sub(4), self.r[15].wrapping_add(off));
+                }
                 self.r[15] = self.r[15].wrapping_add(off);
                 self.reload16(bus);
             }
@@ -1394,6 +1416,54 @@ impl Cpu {
             }
             _ => {}
         }
+    }
+
+    /// Idle-loop detection, for games that busy-wait (e.g. on a RAM flag their
+    /// VBlank handler sets) instead of halting. Called on short backward Thumb
+    /// branches. If the loop body only reads memory and computes, and two
+    /// consecutive iterations end with identical registers and flags, nothing
+    /// can change until the next event (interrupt, DMA, timer), so time skips
+    /// ahead to it.
+    #[cold]
+    #[inline(never)]
+    fn idle_check<B: Bus>(&mut self, bus: &mut B, branch: u32, target: u32) {
+        if branch != self.idle_pc {
+            self.idle_pc = branch;
+            self.idle_pure = Self::loop_is_pure(bus, target, branch);
+            self.idle_seen = false;
+        }
+        if !self.idle_pure {
+            return;
+        }
+        let mut snap = [0u32; 16];
+        snap[..15].copy_from_slice(&self.r[..15]);
+        snap[15] = self.nzcv();
+        if self.idle_seen && snap == self.idle_snap {
+            bus.skip_idle();
+        }
+        self.idle_snap = snap;
+        self.idle_seen = true;
+    }
+
+    /// True if the Thumb code in [start, end) only loads, computes and branches.
+    fn loop_is_pure<B: Bus>(bus: &mut B, start: u32, end: u32) -> bool {
+        let mut a = start;
+        while a < end {
+            let op = bus.peek16(a);
+            let ok = match THUMB_TABLE[(op >> 6) as usize & 0x3FF] {
+                T_SHIFT | T_ADDSUB | T_IMM | T_ALU | T_LDRPC | T_ADDR | T_BCC => true,
+                T_HI => (op >> 8) & 3 != 3 && ((op & 7) | ((op >> 4) & 8)) != 15,
+                T_LSREG => op & (1 << 11) != 0,
+                T_LSSIGN => (op >> 10) & 3 != 0,
+                T_LSIMM | T_LSH | T_LSSP => op & (1 << 11) != 0,
+                _ => false,
+            };
+            if !ok {
+                return false;
+            }
+            a += 2;
+        }
+        true
     }
 
     fn thumb_alu<B: Bus>(&mut self, bus: &mut B, op: u32) {

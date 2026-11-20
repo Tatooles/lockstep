@@ -1,6 +1,6 @@
 // Builds the synthetic benchmark ROM (tools/gba-synth/main.c) with the host's
 // clang (ARM/Thumb codegen) and the Rust toolchain's rust-lld.
-//   node tools/gba-synth/build.ts   -> roms/synth.gba
+//   node tools/gba-synth/build.ts   -> roms/synth.gba, roms/synth-busy.gba (busy-waits for VBlank)
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -26,14 +26,20 @@ function rustBin(name: string): string {
 
 const cflags = ['--target=armv4t-none-eabi', '-mthumb', '-O2', '-ffreestanding', '-nostdlib', '-fno-exceptions', '-Wall'];
 execFileSync('clang', ['--target=armv4t-none-eabi', '-c', join(here, 'crt0.s'), '-o', join(out, 'crt0.o')], { stdio: 'inherit' });
-execFileSync('clang', [...cflags, '-c', join(here, 'main.c'), '-o', join(out, 'main.o')], { stdio: 'inherit' });
-execFileSync(rustBin('rust-lld'), ['-flavor', 'gnu', '-T', join(here, 'gba.ld'), join(out, 'crt0.o'), join(out, 'main.o'), '-o', join(out, 'synth.elf')], {
-  stdio: 'inherit',
-});
 mkdirSync(join(root, 'roms'), { recursive: true });
-const rom = join(root, 'roms', 'synth.gba');
-writeFileSync(rom, flatten(readFileSync(join(out, 'synth.elf'))));
-console.log(rom);
+for (const [name, defs] of [
+  ['synth', []],
+  ['synth-busy', ['-DBUSYWAIT']],
+] as const) {
+  execFileSync('clang', [...cflags, ...defs, '-c', join(here, 'main.c'), '-o', join(out, `${name}.o`)], { stdio: 'inherit' });
+  const elf = join(out, `${name}.elf`);
+  execFileSync(rustBin('rust-lld'), ['-flavor', 'gnu', '-T', join(here, 'gba.ld'), join(out, 'crt0.o'), join(out, `${name}.o`), '-o', elf], {
+    stdio: 'inherit',
+  });
+  const rom = join(root, 'roms', `${name}.gba`);
+  writeFileSync(rom, flatten(readFileSync(elf)));
+  console.log(rom);
+}
 
 /** ELF32 -> ROM image: each PT_LOAD segment at its load address - 0x08000000. */
 function flatten(elf: Buffer): Uint8Array {

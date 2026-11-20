@@ -69,6 +69,12 @@ fn main() {
     if args.iter().any(|a| a == "--norender") {
         g.sys.render = false;
     }
+    if args.iter().any(|a| a == "--no-idle-skip") {
+        g.sys.idle_skip = false;
+    }
+    if args.iter().any(|a| a == "--audio") {
+        g.sys.set_audio(true);
+    }
     // Key script: "frame:mask,frame:mask" (mask stays until the next entry).
     let script: Vec<(u32, u16)> = arg("--keys")
         .map(|s| {

@@ -46,7 +46,21 @@ typedef short s16;
 #define IWRAM_CODE __attribute__((section(".iwram"), target("arm"), noinline))
 #define EWRAM __attribute__((section(".ewram")))
 
-static inline void vblank_wait(void) { __asm__ volatile("swi 0x05" ::: "r0", "r1", "r2", "r3", "memory"); }
+static inline __attribute__((unused)) void vblank_wait(void) { __asm__ volatile("swi 0x05" ::: "r0", "r1", "r2", "r3", "memory"); }
+
+static volatile unsigned int vblanks;
+
+// BUSYWAIT builds spin on a counter the VBlank handler bumps, as some games
+// (and, reportedly, Gen 3 Pokémon) do, instead of halting in VBlankIntrWait.
+static void wait_frame(void) {
+#ifdef BUSYWAIT
+  unsigned int v = vblanks;
+  while (vblanks == v)
+    ;
+#else
+  vblank_wait();
+#endif
+}
 
 static void dma3(const void *src, volatile void *dst, u32 words) {
   DMA3SAD = (u32)src;
@@ -75,7 +89,6 @@ static EWRAM u16 bg_shadow[32 * 32];
 static EWRAM u16 oam_shadow[128 * 4];
 static u32 rng = 12345;
 static u32 frame;
-static volatile u32 vblanks;
 
 static u32 rand(void) {
   rng = rng * 1103515245u + 12345u;
@@ -265,7 +278,7 @@ int main(void) {
       // Occasional bulk work: recolor part of the palette (fades, weather).
       for (int i = 0; i < 256; i++) pal[i] = (u16)(pal[i] + 0x21);
     }
-    vblank_wait();
+    wait_frame();
     // VBlank: shadow buffers to VRAM/OAM, scroll, restart the sound DMA.
     dma3(oam_shadow, (volatile void *)0x7000000, 256);
     dma3(bg_shadow, (volatile void *)(0x6000000 + 31 * 0x800), 512);
