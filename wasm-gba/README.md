@@ -30,7 +30,8 @@ finish the frame), `frame_ptr()` (RGBA), `set_keys(mask)`, `peek8/16/32`,
 an audio ring buffer, `set_time()` for the RTC, `set_render()` (skip drawing,
 e.g. for fast-forward frames nobody sees), and save states: the machine
 struct holds no pointers but the ROM's, so `save_state()`/`load_state()` copy
-its bytes (`state_size()` ≈ 620 KB; only loadable by the same build).
+its bytes (`state_size()` ≈ 780 KB, including the framebuffer; only loadable by the
+same build).
 
 ## Tests
 
