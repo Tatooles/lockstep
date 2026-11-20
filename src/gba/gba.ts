@@ -31,6 +31,7 @@ interface Exports {
   frame_ptr(): number;
   set_keys(mask: number): void;
   cycles(): number;
+  idle_cycles(): number;
   reg(i: number): number;
   set_reg(i: number, v: number): void;
   hook_add(addr: number): number;
@@ -153,6 +154,11 @@ export class Gba {
 
   get cycles(): number {
     return this.x.cycles();
+  }
+
+  /** Cycles the CPU spent halted or in a detected idle loop. */
+  get idleCycles(): number {
+    return this.x.idle_cycles();
   }
 
   set render(on: boolean) {
