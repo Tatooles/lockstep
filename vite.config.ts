@@ -1,9 +1,30 @@
 import react from '@vitejs/plugin-react';
-import { defineConfig } from 'vite';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { defineConfig, type Plugin } from 'vite';
+
+// GBA core spike: bench-gba.html posts its results here so runs on other
+// devices (an iPhone on the LAN) land in tools/out/bench-results.jsonl.
+const benchResults: Plugin = {
+  name: 'gba-bench-results',
+  apply: 'serve',
+  configureServer(server) {
+    server.middlewares.use('/__bench-result', (req, res) => {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        mkdirSync('tools/out', { recursive: true });
+        appendFileSync('tools/out/bench-results.jsonl', body.replace(/\n/g, ' ') + '\n');
+        console.log(`[gba bench] ${body}`);
+        res.end('ok');
+      });
+    });
+  },
+};
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
   plugins: [
+    benchResults,
     react(),
     VitePWA({
       registerType: 'autoUpdate',

@@ -263,3 +263,9 @@ pub extern "C" fn load_state() {
     g.sys.rom = rom;
     g.sys.rom_len = rom_len;
 }
+
+/// Turn scanline rendering off to measure the CPU and system alone.
+#[no_mangle]
+pub extern "C" fn set_render(enabled: u32) {
+    gba().sys.render = enabled != 0;
+}

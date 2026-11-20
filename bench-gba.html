@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GBA Core Bench</title>
+    <style>
+      :root {
+        --bg: #f4f2f7;
+        --fg: #1d1b22;
+        --muted: #6b6676;
+        --accent: #5b3fd1;
+        --panel: #ffffff;
+        --line: #ddd8e6;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #16141b;
+          --fg: #ece9f3;
+          --muted: #9d97ab;
+          --accent: #a28cff;
+          --panel: #211e29;
+          --line: #353042;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 16px;
+        background: var(--bg);
+        color: var(--fg);
+        font: 15px/1.45 -apple-system, system-ui, sans-serif;
+      }
+      main {
+        max-width: 520px;
+        margin: 0 auto;
+        display: grid;
+        gap: 14px;
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0;
+      }
+      p {
+        margin: 0;
+        color: var(--muted);
+      }
+      canvas {
+        width: 100%;
+        image-rendering: pixelated;
+        background: #000;
+        border-radius: 6px;
+      }
+      button {
+        font: inherit;
+        font-weight: 600;
+        padding: 12px;
+        border: 0;
+        border-radius: 8px;
+        background: var(--accent);
+        color: #fff;
+      }
+      button:disabled {
+        opacity: 0.5;
+      }
+      button.secondary {
+        background: var(--panel);
+        color: var(--fg);
+        border: 1px solid var(--line);
+      }
+      pre {
+        margin: 0;
+        padding: 12px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font: 13px/1.5 ui-monospace, Menlo, monospace;
+        min-height: 4em;
+      }
+      .big {
+        font-size: 32px;
+        font-weight: 700;
+      }
+      label {
+        color: var(--muted);
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>GBA core bench</h1>
+      <p>Uncapped emulation speed of the Rust/Wasm GBA core, in multiples of real time (59.73 fps).</p>
+      <canvas id="screen" width="240" height="160"></canvas>
+      <div class="big" id="speed">–</div>
+      <button id="run" disabled>Loading…</button>
+      <pre id="out"></pre>
+      <button id="copy" class="secondary">Copy results</button>
+      <label>Or pick a ROM on this device: <input type="file" id="file" accept=".gba" /></label>
+    </main>
+    <script type="module" src="/src/gba/bench-page.ts"></script>
+  </body>
+</html>
