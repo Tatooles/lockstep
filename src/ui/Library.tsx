@@ -29,6 +29,11 @@ export function Library({ onOpen, opening, error }: { onOpen: (r: RomRecord) => 
     void refresh();
   }, []);
 
+  // Show whichever message is newer: a failed open replaces the import notice.
+  useEffect(() => {
+    if (error) setMsg(null);
+  }, [error]);
+
   const addFile = async (file: File) => {
     setMsg(null);
     if (file.size > 8 * 1024 * 1024) {

@@ -25,7 +25,7 @@ export function preloadCore(): void {
 
 export async function createGameBoy(rom: Uint8Array): Promise<GameBoy> {
   if (typeof WebAssembly !== 'object') {
-    throw new Error("This browser can't run WebAssembly, which the emulator needs. On iPhone, Lockdown Mode turns it off.");
+    throw new Error("This browser can't run WebAssembly, which the emulator needs. On iPhone, Lockdown Mode can turn it off.");
   }
   try {
     return await GameBoy.create(await wasmModule(), rom);
