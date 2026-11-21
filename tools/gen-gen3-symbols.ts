@@ -45,6 +45,7 @@ const ROM: Record<string, string[]> = {
   typeEffectiveness: ['gTypeEffectiveness'],
   abilityNames: ['gAbilityNames'],
   mapGroups: ['gMapGroups'],
+  pokedexEntries: ['gPokedexEntries'],
 };
 // RAM symbols (the same for every revision of a family; checked below).
 const RAM: Record<string, string[]> = {
@@ -64,6 +65,8 @@ const RAM: Record<string, string[]> = {
   battleMons: ['gBattleMons'],
   battlerPartyIndexes: ['gBattlerPartyIndexes'],
   trainerOpponent: ['gTrainerBattleOpponent_A', 'gTrainerBattleOpponent'],
+  battleWeather: ['gBattleWeather'],
+  sideStatuses: ['gSideStatuses'],
 };
 
 function load(repo: string, file: string): Map<string, number> {

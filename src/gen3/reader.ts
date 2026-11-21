@@ -1,7 +1,7 @@
 // Turns Gen 3 RAM into the same snapshots the Gen 1 tracker uses: the party
 // and PC (decrypting each Pokémon's data), battle state, map, badges and bag.
 
-import type { BattleMonData, EnemyData, MonData, Snapshot } from '../run/events.ts';
+import type { BattleExtras, BattleMonData, EnemyData, MonData, Snapshot } from '../run/events.ts';
 import { BATTLE_TYPE, type Gen3Data } from './rom.ts';
 import { decodeText } from './text.ts';
 
@@ -52,6 +52,8 @@ const LAYOUT = {
 
 const BOXES = 14;
 const BOX_SIZE = 30;
+/** gSaveBlock1Ptr->rivalName on FR/LG. */
+const FRLG_RIVAL_NAME = 0x3a4c;
 
 export function monKey(personality: number, otId: number): string {
   return `${personality.toString(16).padStart(8, '0')}-${otId.toString(16).padStart(8, '0')}`;
@@ -132,6 +134,10 @@ export class Gen3Reader {
       dvs: pid,
       stats: party ? { atk: u16(90), def: u16(92), spd: u16(94), spc: u16(96), spdef: u16(98) } : null,
       key: monKey(pid, otId),
+      item: su16(o.G + 2),
+      friendship: s[o.G + 9],
+      ivs: su32(o.M + 4) & 0x3fffffff,
+      ability: sp.abilities[su32(o.M + 4) >>> 31 && sp.abilities[1] ? 1 : 0],
     };
   }
 
@@ -160,6 +166,26 @@ export class Gen3Reader {
       if (c!.mon) out.push(c!.mon);
     }
     return out;
+  }
+
+  /** gBattleMons[battler] extras, if that battler is this Pokémon (the struct is stale until it's sent out). */
+  private extras(mem: Mem, base: number, mon: MonData): BattleExtras | null {
+    if (mem.u16(base) !== mon.species || mem.u32(base + 0x48) !== mon.dvs) return null;
+    const stages = Array.from({ length: 8 }, (_, i) => mem.u8(base + 0x18 + i) - 6);
+    return {
+      ability: mem.u8(base + 0x20),
+      item: mem.u16(base + 0x2e),
+      stages,
+      status: mem.u32(base + 0x4c),
+      status2: mem.u32(base + 0x50),
+      ivs: mem.u32(base + 0x14) & 0x3fffffff,
+      friendship: mem.u8(base + 0x2b),
+    };
+  }
+
+  /** Extras from the party data, before the Pokémon is on the field. */
+  private partyExtras(mon: MonData): BattleExtras {
+    return { ability: mon.ability ?? 0, item: mon.item ?? 0, stages: [0, 0, 0, 0, 0, 0, 0, 0], status: mon.status, status2: 0, ivs: mon.ivs ?? 0, friendship: mon.friendship ?? 0 };
   }
 
   private battleMon(mem: Mem, base: number) {
@@ -216,31 +242,45 @@ export class Gen3Reader {
 
     let enemy: EnemyData | null = null;
     let battleMon: BattleMonData | null = null;
+    let field: Snapshot['field'];
     let activeSlot = 0;
     if (inBattle) {
       // The enemy party is generated before the battle starts (gBattleMons fills in later).
       const idx = mem.u8(r.battlerPartyIndexes! + 2);
       const e = this.decode(mem, r.enemyParty! + (idx < 6 ? idx : 0) * 100, true);
       if (e && e !== 'bad') {
+        const base = r.battleMons! + 0x58;
+        const live = this.extras(mem, base, e);
+        const bm = live ? this.battleMon(mem, base) : null;
         const opp = inBattle === 2 ? mem.u16(r.trainerOpponent!) : 0;
         const t = opp ? this.data.trainer(opp) : null;
         const ghost = this.data.gameFamily === 'frlg' && !!(battleType & BATTLE_TYPE.GHOST) && !(battleType & BATTLE_TYPE.GHOST_UNVEILED);
         enemy = {
           species: e.species,
-          level: e.level,
-          hp: e.hp,
-          maxHp: e.maxHp,
+          level: bm ? bm.level : e.level,
+          hp: bm ? bm.hp : e.hp,
+          maxHp: bm ? bm.maxHp : e.maxHp,
           dvs: e.dvs,
           trainerClass: t?.cls ?? 0,
           trainerNo: opp,
+          trainerName: t ? this.trainerName(mem, sb1, t) : undefined,
           ghost,
-          types: e.types,
-          moves: e.moves,
-          stats: e.stats!,
+          types: bm ? bm.types : e.types,
+          moves: bm ? bm.moves : e.moves,
+          stats: bm ? bm.stats : e.stats!,
+          extra: live ?? this.partyExtras(e),
         };
       }
       activeSlot = mem.u8(r.battlerPartyIndexes!);
       battleMon = this.battleMon(mem, r.battleMons!);
+      const mine = party[activeSlot];
+      const extra = mine ? this.extras(mem, r.battleMons!, mine) : null;
+      if (extra) battleMon.extra = extra;
+      field = {
+        weather: mem.u16(r.battleWeather!),
+        sides: [mem.u16(r.sideStatuses!), mem.u16(r.sideStatuses! + 2)],
+        double: !!(battleType & 1),
+      };
     }
 
     const key = L.key >= 0 ? mem.u32(sb2 + L.key) : 0;
@@ -270,7 +310,15 @@ export class Gen3Reader {
       bag: this.bag(mem, sb1, sb2),
       x: s16(mem.u16(sb1)),
       y: s16(mem.u16(sb1 + 2)),
+      field,
     };
+  }
+
+  /** FR/LG's rival (and champion) entries hold a placeholder; the game shows the name you gave your rival. */
+  private trainerName(mem: Mem, sb1: number, t: { cls: number; name: string }): string {
+    const cls = this.data.trainerClassName(t.cls);
+    if (this.data.gameFamily === 'frlg' && (cls === 'Rival' || cls === 'Champion')) return decodeText(mem.bytes(sb1 + FRLG_RIVAL_NAME, 8), 0, 8) || t.name;
+    return t.name;
   }
 
   /** Battle style option: true is Set (no switch offer after a knockout). */

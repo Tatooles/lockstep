@@ -33,6 +33,23 @@ export interface MonData {
   stats: Stats | null;
   /** Stable identity across party/box moves and evolutions. */
   key: string;
+  /** Gen 3: held item, ability id, packed IVs and friendship. */
+  item?: number;
+  ability?: number;
+  ivs?: number;
+  friendship?: number;
+}
+
+/** Gen 3 battle state from gBattleMons that the damage helper needs. */
+export interface BattleExtras {
+  ability: number;
+  item: number;
+  /** Stat stages −6…+6 (HP, Atk, Def, Spe, SpA, SpD, accuracy, evasion). */
+  stages: number[];
+  status: number;
+  status2: number;
+  ivs: number;
+  friendship: number;
 }
 
 export interface EnemyData {
@@ -43,11 +60,15 @@ export interface EnemyData {
   dvs: number;
   trainerClass: number; // 0 for wild
   trainerNo: number;
+  /** Gen 3: the trainer's name as the game shows it (FR/LG put your rival's chosen name in). */
+  trainerName?: string;
   /** Unidentified Pokemon Tower ghost (no Silph Scope). */
   ghost: boolean;
   types: [number, number];
   moves: number[];
   stats: Stats;
+  /** Gen 3 only. */
+  extra?: BattleExtras;
 }
 
 /** The player's Pokemon currently in battle (wBattleMon), with in-battle stats. */
@@ -59,6 +80,16 @@ export interface BattleMonData {
   types: [number, number];
   moves: number[];
   stats: Stats;
+  /** Gen 3 only. */
+  extra?: BattleExtras;
+}
+
+/** Gen 3 battle field: weather and each side's Reflect / Light Screen. */
+export interface BattleField {
+  weather: number;
+  /** gSideStatuses: [player's side, foe's side]. */
+  sides: [number, number];
+  double: boolean;
 }
 
 export interface Snapshot {
@@ -83,6 +114,8 @@ export interface Snapshot {
   bag: Record<number, number>;
   x: number;
   y: number;
+  /** Gen 3 only, in battle. */
+  field?: BattleField;
 }
 
 const GEN1_BALLS = new Set([0x01, 0x02, 0x03, 0x04, 0x08]);

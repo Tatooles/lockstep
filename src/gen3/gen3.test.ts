@@ -63,7 +63,7 @@ function partyMon(o: { pid: number; otId: number; species: number; exp: number; 
 
 describe('gen 3 Pokémon decoding', () => {
   const data = {
-    species: Object.assign([], { 16: { types: [0, 2], growth: 3 } }),
+    species: Object.assign([], { 16: { types: [0, 2], growth: 3, abilities: [51, 0] } }),
     gameFamily: 'frlg',
     ram: RAM_SYMBOLS.frlg,
     levelFor: () => 3,

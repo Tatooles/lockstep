@@ -3,7 +3,9 @@
 
 import { useState } from 'react';
 import type { Gen1Data, Move, Species } from '../gen1/rom.ts';
+import { gen1Battle, gen1Wild } from '../gen1/battle.ts';
 import { readMilestones } from '../gen1/milestones.ts';
+import { TYPE_COLORS, typeName } from '../gen1/types.ts';
 import type { Snapshot } from '../gen1/watcher.ts';
 import { newRun } from '../run/engine.ts';
 import type { Session, SessionView } from '../platform/session.ts';
@@ -66,6 +68,21 @@ const data = {
         }
       : null,
   trainerParties: (cls: number) => (cls === 0x22 ? [{ cls, no: 1, mons: [{ level: 12, species: 0xa9 }, { level: 14, species: 0x22 }] }] : []),
+  typeName,
+  typeColor: (t: number) => TYPE_COLORS[t],
+  areaOf: (m: number) => (m === 12 ? 'Route 1' : `Map ${m}`),
+  mapName: (m: number) => (m === 12 ? 'Route 1' : `Map ${m}`),
+  wildSections: (m: number, r: null) => gen1Wild(data, m, r),
+  battle: (s: Snapshot) => gen1Battle(data, s),
+  spriteUrl: () => null,
+  move: (id: number) => moves[id],
+  family: (s: number) => species.get(s)?.dex,
+  xpProgress: () => ({ into: 300, span: 500, toNext: 200 }),
+  itemName: () => undefined,
+  trainerClassName: (c: number) => (c === 0x22 ? 'Brock' : undefined),
+  badgeName: (i: number) => `Badge ${i + 1}`,
+  areaHasWild: () => true,
+  gen: 1,
 } as unknown as Gen1Data;
 
 const party = [

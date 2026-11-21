@@ -1,6 +1,7 @@
 // Gen 1 damage calculation (port of pret engine/battle/core.asm CalculateDamage,
 // AdjustDamageForMoveType and RandomizeDamage).
 
+import type { DamageResult } from '../run/damage.ts';
 import type { Move } from './rom.ts';
 
 export interface Combatant {
@@ -14,18 +15,7 @@ export interface Combatant {
   types: [number, number];
 }
 
-export interface DamageResult {
-  kind: 'damage' | 'fixed' | 'ohko' | 'status' | 'immune';
-  /** Per-hit damage range (random roll 217..255). */
-  min: number;
-  max: number;
-  /** Per-hit range on a critical hit (level doubled). */
-  critMin: number;
-  critMax: number;
-  /** Number of hits [min, max]. */
-  hits: [number, number];
-  effectiveness: number;
-}
+export { threatOf, type DamageResult, type Threat } from '../run/damage.ts';
 
 const EXPLODE_EFFECT = 0x07;
 const TWO_TO_FIVE_ATTACKS_EFFECT = 0x1d;
@@ -123,18 +113,4 @@ export function calcDamage(move: Move, attacker: Combatant, defender: Combatant,
   if (move.effect === TWO_TO_FIVE_ATTACKS_EFFECT) hits = [2, 5];
   else if (move.effect === ATTACK_TWICE_EFFECT || move.effect === TWINEEDLE_EFFECT) hits = [2, 2];
   return { kind: 'damage', min, max, critMin, critMax, hits, effectiveness: eff };
-}
-
-export type Threat = 'ko' | 'crit-ko' | 'heavy' | 'ok';
-
-/** How dangerous a hit is for a defender at its current HP. */
-export function threatOf(r: DamageResult, defenderHp: number): Threat {
-  if (r.kind === 'status' || r.kind === 'immune') return 'ok';
-  const maxTotal = r.max * r.hits[1];
-  const critTotal = Math.max(r.critMax, r.max) * r.hits[1];
-  if (r.kind === 'ohko') return 'ko';
-  if (maxTotal >= defenderHp) return 'ko';
-  if (critTotal >= defenderHp) return 'crit-ko';
-  if (maxTotal * 2 >= defenderHp) return 'heavy';
-  return 'ok';
 }
