@@ -1,9 +1,7 @@
-import { MAPS } from '../gen1/maps.ts';
-import type { Gen1Data } from '../gen1/rom.ts';
-import { areaOf, ownedFamilies, usedAreas } from '../run/engine.ts';
+import type { Dex } from '../run/dex.ts';
+import { ownedFamilies, usedAreas } from '../run/engine.ts';
+import type { MonData, Snapshot } from '../run/events.ts';
 import type { Encounter, Run } from '../run/types.ts';
-import type { MonData, Snapshot } from '../gen1/watcher.ts';
-import { levelProgress } from '../gen1/exp.ts';
 
 export type RouteState = 'untracked' | 'none' | 'noballs' | 'open' | 'pending' | 'caught' | 'failed' | 'loading';
 
@@ -12,29 +10,25 @@ export interface RouteInfo {
   area: string;
   mapName: string;
   encounter: Encounter | null;
-  hasWild: boolean;
 }
 
-export function routeInfo(data: Gen1Data | null, run: Run | null, snap: Snapshot | null): RouteInfo {
-  if (!snap) return { state: 'loading', area: 'Starting up', mapName: '', encounter: null, hasWild: false };
-  const map = MAPS[snap.mapId];
-  const mapName = map?.name ?? `Map ${snap.mapId}`;
-  const hasWild = !!data?.wild(snap.mapId);
-  if (!run) return { state: 'untracked', area: mapName, mapName, encounter: null, hasWild };
-  const area = areaOf(snap.mapId, run.rules);
+export function routeInfo(data: Dex | null, run: Run | null, snap: Snapshot | null): RouteInfo {
+  if (!snap || !data) return { state: 'loading', area: 'Starting up', mapName: '', encounter: null };
+  const mapName = data.mapName(snap.mapId);
+  if (!run) return { state: 'untracked', area: mapName, mapName, encounter: null };
+  const area = data.areaOf(snap.mapId, run.rules);
   const enc = usedAreas(run).get(area) ?? null;
   if (enc) {
     const state = enc.outcome === 'pending' ? 'pending' : enc.outcome === 'caught' ? 'caught' : 'failed';
-    return { state, area, mapName, encounter: enc, hasWild };
+    return { state, area, mapName, encounter: enc };
   }
   // Areas with grouped maps: wild data may live on another floor.
-  const anyWild = hasWild || MAPS.some((m) => areaOf(m.id, run.rules) === area && !!data?.wild(m.id));
-  if (!anyWild) return { state: 'none', area, mapName, encounter: null, hasWild };
-  if (run.rules.waitForBalls && !run.hadBalls) return { state: 'noballs', area, mapName, encounter: null, hasWild };
-  return { state: 'open', area, mapName, encounter: null, hasWild };
+  if (!data.areaHasWild(area, run.rules)) return { state: 'none', area, mapName, encounter: null };
+  if (run.rules.waitForBalls && !run.hadBalls) return { state: 'noballs', area, mapName, encounter: null };
+  return { state: 'open', area, mapName, encounter: null };
 }
 
-export function routeLine(info: RouteInfo, data: Gen1Data | null): string {
+export function routeLine(info: RouteInfo, data: Dex | null): string {
   const n = (s: number) => data?.speciesName(s) ?? '?';
   switch (info.state) {
     case 'loading':
@@ -56,17 +50,16 @@ export function routeLine(info: RouteInfo, data: Gen1Data | null): string {
   }
 }
 
-export function isDupe(run: Run | null, data: Gen1Data | null, species: number): boolean {
+export function isDupe(run: Run | null, data: Dex | null, species: number): boolean {
   if (!run || !data || !run.rules.dupesClause) return false;
-  const sp = data.species.get(species);
-  return !!sp && ownedFamilies(run, data).has(sp.family);
+  const f = data.family(species);
+  return f !== undefined && ownedFamilies(run, data).has(f);
 }
 
 /** Share of the way to the next level, 0–1 (1 at level 100), or null if the species is unknown. */
-export function xpFraction(data: Gen1Data, m: MonData): number | null {
-  const growth = data.species.get(m.species)?.growth;
-  if (growth === undefined) return null;
-  const xp = levelProgress(growth, m.level, m.exp);
+export function xpFraction(data: Dex, m: MonData): number | null {
+  const xp = data.xpProgress(m.species, m.level, m.exp);
+  if (xp === undefined) return null;
   return xp ? xp.into / xp.span : 1;
 }
 
@@ -80,4 +73,10 @@ export function fmtPlay(sec: number): string {
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   return `${h}:${m.toString().padStart(2, '0')}`;
+}
+
+/** 'firered' → 'FireRed', 'red' → 'Red'. */
+export function versionLabel(version: string): string {
+  const special: Record<string, string> = { firered: 'FireRed', leafgreen: 'LeafGreen' };
+  return special[version] ?? version[0].toUpperCase() + version.slice(1);
 }

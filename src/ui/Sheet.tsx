@@ -1,23 +1,27 @@
 import { useEffect, useRef, useState } from 'react';
 import { MAPS } from '../gen1/maps.ts';
-import type { Gen1Data } from '../gen1/rom.ts';
+import { Gen1Data } from '../gen1/rom.ts';
 import { TYPE_COLORS, typeName } from '../gen1/types.ts';
 import type { BattleMonData, EnemyData, MonData } from '../gen1/watcher.ts';
 import { calcDamage, threatOf, type Combatant, type Threat } from '../gen1/damage.ts';
-import { levelProgress } from '../gen1/exp.ts';
-import { areaOf, usedAreas } from '../run/engine.ts';
+import { THUMB_H as GBA_THUMB_H, THUMB_W as GBA_THUMB_W, type GbaSession } from '../gba/session.ts';
+import type { Dex } from '../run/dex.ts';
+import { usedAreas } from '../run/engine.ts';
 import type { Encounter, Run, TrackedMon } from '../run/types.ts';
 import { PALETTES, paletteById } from '../platform/palettes.ts';
 import type { Session, SessionView } from '../platform/session.ts';
 import { db, type StateRecord } from '../platform/storage.ts';
-import { fmtPlay, hpClass, isDupe, routeInfo, routeLine } from './derive.ts';
+import { fmtPlay, hpClass, isDupe, routeInfo, routeLine, versionLabel } from './derive.ts';
 import { prefs } from './prefs.ts';
 import { Sprite } from './Sprite.tsx';
 
 export type TabId = 'battle' | 'route' | 'team' | 'log' | 'graves' | 'run';
 
+/** A Game Boy or Game Boy Advance play session. */
+export type PlaySession = Session | GbaSession;
+
 interface Props {
-  session: Session;
+  session: PlaySession;
   view: SessionView;
   tab: TabId;
   onTab: (t: TabId) => void;
@@ -28,12 +32,14 @@ interface Props {
 }
 
 export function Sheet({ session, view, tab, onTab, onClose, onStartRun, onExit, docked }: Props) {
-  const data = session.data;
+  const data: Dex | null = session.data;
+  // The battle tab and wild tables are Gen 1 only for now.
+  const gen1 = data instanceof Gen1Data ? data : null;
   const { run, snap } = view;
   const inBattle = !!snap?.inBattle && !!snap.enemy?.species;
   const dead = run ? Object.values(run.mons).filter((m) => m.status === 'dead') : [];
   const tabs: { id: TabId; label: string; count?: number; live?: boolean; hidden?: boolean }[] = [
-    { id: 'battle', label: 'Battle', live: true, hidden: !inBattle || !data },
+    { id: 'battle', label: 'Battle', live: true, hidden: !inBattle || !gen1 },
     { id: 'route', label: 'Route', hidden: !data },
     { id: 'team', label: 'Team', hidden: !data },
     { id: 'log', label: 'Log', hidden: !run },
@@ -79,7 +85,7 @@ export function Sheet({ session, view, tab, onTab, onClose, onStartRun, onExit, 
             ))}
         </div>
         <div className="sheet-body" ref={bodyRef}>
-          {active === 'battle' && data && <BattleTab data={data} view={view} />}
+          {active === 'battle' && gen1 && <BattleTab data={gen1} view={view} />}
           {active === 'route' && data && <RouteTab data={data} view={view} session={session} onStartRun={onStartRun} />}
           {active === 'team' && data && <TeamTab data={data} view={view} />}
           {active === 'log' && run && <LogTab run={run} />}
@@ -91,13 +97,13 @@ export function Sheet({ session, view, tab, onTab, onClose, onStartRun, onExit, 
   );
 }
 
-function Types({ types }: { types: [number, number] }) {
+function Types({ types, data }: { types: [number, number]; data?: Dex }) {
   const list = types[0] === types[1] ? [types[0]] : types;
   return (
     <span className="types">
       {list.map((t) => (
-        <span key={t} className="type" style={{ background: TYPE_COLORS[t] ?? '#888' }}>
-          {typeName(t)}
+        <span key={t} className="type" style={{ background: (data ? data.typeColor(t) : TYPE_COLORS[t]) ?? '#888' }}>
+          {data ? data.typeName(t) : typeName(t)}
         </span>
       ))}
     </span>
@@ -120,7 +126,7 @@ function BattleTab({ data, view }: { data: Gen1Data; view: SessionView }) {
   const types = enemy.types;
   const trainerTeam =
     enemy.trainerClass && enemy.trainerNo ? data.trainerParties(enemy.trainerClass)[enemy.trainerNo - 1]?.mons ?? [] : [];
-  const area = run ? areaOf(snap.mapId, run.rules) : MAPS[snap.mapId]?.name;
+  const area = run ? data.areaOf(snap.mapId, run.rules) : MAPS[snap.mapId]?.name;
   const enc = run && enemy.trainerClass === 0 ? usedAreas(run).get(area ?? '') : undefined;
   const counts = enemy.trainerClass === 0 && run?.activeEncounterId && enc?.id === run.activeEncounterId;
 
@@ -293,16 +299,15 @@ function DangerCheck({ data, me, foe, myName }: { data: Gen1Data; me: BattleMonD
 }
 
 // ---------------- Route ----------------
-function RouteTab({ data, view, session, onStartRun }: { data: Gen1Data; view: SessionView; session: Session; onStartRun: () => void }) {
+function RouteTab({ data, view, session, onStartRun }: { data: Dex; view: SessionView; session: PlaySession; onStartRun: () => void }) {
   const { run, snap } = view;
   const info = routeInfo(data, run, snap);
   if (!snap) return <p className="empty-state">Load your save in the game and the route info will appear here.</p>;
-  const mapIds = run
-    ? MAPS.filter((m) => areaOf(m.id, run.rules) === info.area).map((m) => m.id)
-    : [snap.mapId];
+  const gen1 = data instanceof Gen1Data ? data : null;
+  const mapIds = !gen1 ? [] : run ? MAPS.filter((m) => gen1.areaOf(m.id, run.rules) === info.area).map((m) => m.id) : [snap.mapId];
   // Current map first.
   mapIds.sort((a, b) => (a === snap.mapId ? -1 : b === snap.mapId ? 1 : a - b));
-  const tables = mapIds.map((id) => ({ id, t: data.wild(id) })).filter((x) => x.t);
+  const tables = gen1 ? mapIds.map((id) => ({ id, t: gen1.wild(id) })).filter((x) => x.t) : [];
 
   return (
     <div>
@@ -341,19 +346,19 @@ function RouteTab({ data, view, session, onStartRun }: { data: Gen1Data; view: S
       {tables.map(({ id, t }) => (
         <div key={id}>
           {tables.length > 1 && <h3 style={{ color: 'var(--ink)' }}>{MAPS[id].name}</h3>}
-          {t!.grass.length > 0 && <WildGrid title={`Grass and caves (rate ${t!.grassRate})`} slots={t!.grass} data={data} run={run} />}
-          {t!.water.length > 0 && <WildGrid title={`Surfing (rate ${t!.waterRate})`} slots={t!.water} data={data} run={run} />}
+          {t!.grass.length > 0 && <WildGrid title={`Grass and caves (rate ${t!.grassRate})`} slots={t!.grass} data={gen1!} run={run} />}
+          {t!.water.length > 0 && <WildGrid title={`Surfing (rate ${t!.waterRate})`} slots={t!.water} data={gen1!} run={run} />}
           {t!.superRod.length > 0 && (
             <WildGrid
               title="Super Rod"
               slots={t!.superRod.map((s) => ({ ...s, chance: 1 / t!.superRod.length }))}
-              data={data}
+              data={gen1!}
               run={run}
             />
           )}
         </div>
       ))}
-      {tables.length === 0 && <p className="empty-state">No wild Pokémon live here.</p>}
+      {gen1 && tables.length === 0 && <p className="empty-state">No wild Pokémon live here.</p>}
       {run && <EncounterList data={data} run={run} session={session} />}
     </div>
   );
@@ -399,7 +404,7 @@ const OUTCOME_LABEL: Record<Encounter['outcome'], string> = {
   skipped: "Doesn't count",
 };
 
-function EncounterList({ data, run, session }: { data: Gen1Data; run: Run; session: Session }) {
+function EncounterList({ data, run, session }: { data: Dex; run: Run; session: PlaySession }) {
   const setOutcome = (id: string, outcome: Encounter['outcome']) =>
     session.updateRun((r) => {
       const e = r.encounters.find((x) => x.id === id);
@@ -453,10 +458,11 @@ function EncounterList({ data, run, session }: { data: Gen1Data; run: Run; sessi
 }
 
 // ---------------- Team ----------------
-function MonCard({ data, m, tracked }: { data: Gen1Data; m: MonData; tracked?: TrackedMon }) {
+function MonCard({ data, m, tracked }: { data: Dex; m: MonData; tracked?: TrackedMon }) {
   const dead = tracked?.status === 'dead';
-  const growth = data.species.get(m.species)?.growth;
-  const xp = growth === undefined ? null : levelProgress(growth, m.level, m.exp);
+  const progress = data.xpProgress(m.species, m.level, m.exp);
+  const hasXp = progress !== undefined;
+  const xp = progress ?? null;
   return (
     <article className={`mon-card${dead ? ' dead' : ''}`}>
       <header>
@@ -468,7 +474,7 @@ function MonCard({ data, m, tracked }: { data: Gen1Data; m: MonData; tracked?: T
             {tracked?.origin === 'starter' ? ', your starter' : tracked && tracked.origin !== 'baseline' ? `, met in ${tracked.area}` : ''}
           </div>
           <div style={{ marginTop: 4 }}>
-            <Types types={m.types} />
+            <Types types={m.types} data={data} />
           </div>
         </div>
         <div className="lvl">
@@ -476,7 +482,7 @@ function MonCard({ data, m, tracked }: { data: Gen1Data; m: MonData; tracked?: T
           <small>level</small>
         </div>
       </header>
-      {(m.maxHp > 0 || growth !== undefined) && (
+      {(m.maxHp > 0 || hasXp) && (
         <div className="bars">
           {m.maxHp > 0 && (
             <>
@@ -488,7 +494,7 @@ function MonCard({ data, m, tracked }: { data: Gen1Data; m: MonData; tracked?: T
               </span>
             </>
           )}
-          {growth !== undefined && (
+          {hasXp && (
             <>
               <span className="xp" role="progressbar" aria-label="Experience" aria-valuenow={xp ? Math.round((100 * xp.into) / xp.span) : 100} aria-valuemin={0} aria-valuemax={100}>
                 <i style={{ width: `${xp ? (100 * xp.into) / xp.span : 100}%` }} />
@@ -505,9 +511,9 @@ function MonCard({ data, m, tracked }: { data: Gen1Data; m: MonData; tracked?: T
           .map((id, i) => ({ id, pp: m.pp[i] }))
           .filter((x) => x.id > 0)
           .map(({ id, pp }, i) => {
-            const mv = data.moves[id];
+            const mv = data.move(id);
             return (
-              <div key={i} className="move" style={{ borderLeftColor: TYPE_COLORS[mv?.type] ?? undefined }}>
+              <div key={i} className="move" style={{ borderLeftColor: (mv && data.typeColor(mv.type)) ?? undefined }}>
                 <b>{mv?.name}</b>
                 <small>
                   {pp}/{mv?.pp}
@@ -517,7 +523,7 @@ function MonCard({ data, m, tracked }: { data: Gen1Data; m: MonData; tracked?: T
           })}
       </div>
       {m.stats && (
-        <div className="stats">
+        <div className={`stats${m.stats.spdef === undefined ? '' : ' six'}`}>
           <div>
             <b>{m.maxHp}</b>HP
           </div>
@@ -530,16 +536,27 @@ function MonCard({ data, m, tracked }: { data: Gen1Data; m: MonData; tracked?: T
           <div>
             <b>{m.stats.spd}</b>Spe
           </div>
-          <div>
-            <b>{m.stats.spc}</b>Spc
-          </div>
+          {m.stats.spdef === undefined ? (
+            <div>
+              <b>{m.stats.spc}</b>Spc
+            </div>
+          ) : (
+            <>
+              <div>
+                <b>{m.stats.spc}</b>SpA
+              </div>
+              <div>
+                <b>{m.stats.spdef}</b>SpD
+              </div>
+            </>
+          )}
         </div>
       )}
     </article>
   );
 }
 
-function TeamTab({ data, view }: { data: Gen1Data; view: SessionView }) {
+function TeamTab({ data, view }: { data: Dex; view: SessionView }) {
   const { snap, run } = view;
   if (!snap) return <p className="empty-state">Your team shows up once a save is loaded.</p>;
   const cap = view.milestone;
@@ -569,9 +586,7 @@ function TeamTab({ data, view }: { data: Gen1Data; view: SessionView }) {
       ))}
       {snap.box.length > 0 && (
         <>
-          <h3>
-            Box {snap.boxNum} ({snap.box.length}/20)
-          </h3>
+          <h3>{data.gen === 1 ? `Box ${snap.boxNum} (${snap.box.length}/20)` : `PC (${snap.box.length})`}</h3>
           <ul className="rows">
             {snap.box.map((m) => {
               const t = run?.mons[m.key];
@@ -623,7 +638,7 @@ function LogTab({ run }: { run: Run }) {
 }
 
 // ---------------- Graves ----------------
-function GravesTab({ data, dead, session }: { data: Gen1Data | null; dead: TrackedMon[]; session: Session }) {
+function GravesTab({ data, dead, session }: { data: Dex | null; dead: TrackedMon[]; session: PlaySession }) {
   const undo = (m: TrackedMon) => {
     if (!confirm(`Bring ${m.nickname} back? Use this only if the faint was undone, for example by reloading your in-game save.`)) return;
     session.updateRun((r) => {
@@ -676,12 +691,23 @@ function Toggle({ label, hint, checked, onChange }: { label: string; hint?: stri
   );
 }
 
-function SlotThumb({ rec }: { rec: StateRecord | undefined }) {
+function SlotThumb({ rec }: { rec: StateRecord<unknown> | undefined }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const palette = paletteById(prefs.get().palette);
+  const rgba = rec?.thumb?.length === GBA_THUMB_W * GBA_THUMB_H * 4;
   useEffect(() => {
     const c = ref.current;
     if (!c || !rec?.thumb) return;
+    if (rgba) {
+      // Game Boy Advance: a half-size RGBA screenshot.
+      c.width = GBA_THUMB_W;
+      c.height = GBA_THUMB_H;
+      const ctx = c.getContext('2d')!;
+      const img = ctx.createImageData(GBA_THUMB_W, GBA_THUMB_H);
+      img.data.set(rec.thumb);
+      ctx.putImageData(img, 0, 0);
+      return;
+    }
     c.width = 160;
     c.height = 144;
     const ctx = c.getContext('2d')!;
@@ -691,15 +717,16 @@ function SlotThumb({ rec }: { rec: StateRecord | undefined }) {
       img.data.set([...cols[s], 255], i * 4);
     });
     ctx.putImageData(img, 0, 0);
-  }, [rec, palette]);
-  return <canvas ref={ref} />;
+  }, [rec, palette, rgba]);
+  return <canvas ref={ref} className={rgba ? 'gba' : undefined} />;
 }
 
-function RunTab({ session, view, onStartRun, onExit }: { session: Session; view: SessionView; onStartRun: () => void; onExit: () => void }) {
+function RunTab({ session, view, onStartRun, onExit }: { session: PlaySession; view: SessionView; onStartRun: () => void; onExit: () => void }) {
   const { run } = view;
   const p = prefs.get();
+  const gb = session.system === 'gb';
   const [, force] = useState(0);
-  const [slots, setSlots] = useState<Record<string, StateRecord | undefined>>({});
+  const [slots, setSlots] = useState<Record<string, StateRecord<unknown> | undefined>>({});
   const [msg, setMsg] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const statesOk = session.canUseStates();
@@ -740,7 +767,7 @@ function RunTab({ session, view, onStartRun, onExit }: { session: Session; view:
           <Toggle label="Wait for Poké Balls" hint="Wild battles only count as encounters once you've had Poké Balls." checked={run.rules.waitForBalls} onChange={(v) => setRule('waitForBalls', v)} />
           <Toggle label="No items in battle" hint="Flag healing and other items used mid-battle. Poké Balls are fine." checked={!!run.rules.noBattleItems} onChange={(v) => setRule('noBattleItems', v)} />
           <Toggle label="No save states" hint="Hardcore: only the in-game save. Resuming after closing the app still works." checked={run.rules.noSaveStates} onChange={(v) => setRule('noSaveStates', v)} />
-          <div className="field">
+          {gb && <div className="field">
             <span>
               <span className="lbl">Areas</span>
               <div className="hint">Whether each cave floor or building counts separately.</div>
@@ -753,7 +780,7 @@ function RunTab({ session, view, onStartRun, onExit }: { session: Session; view:
                 Per map
               </button>
             </span>
-          </div>
+          </div>}
         </>
       ) : (
         <>
@@ -768,7 +795,7 @@ function RunTab({ session, view, onStartRun, onExit }: { session: Session; view:
         </>
       )}
 
-      {session.data && (
+      {session.system === 'gb' && session.data && (
         <>
           <h3>Game helpers</h3>
           <Toggle
@@ -802,7 +829,11 @@ function RunTab({ session, view, onStartRun, onExit }: { session: Session; view:
                   className="btn"
                   disabled={!slots[s]}
                   onClick={async () => {
-                    if (await session.loadSlot(s)) setMsg(`Loaded slot ${s}.`);
+                    try {
+                      if (await session.loadSlot(s)) setMsg(`Loaded slot ${s}.`);
+                    } catch (err) {
+                      setMsg(err instanceof Error ? err.message : String(err));
+                    }
                   }}
                 >
                   Load
@@ -816,8 +847,8 @@ function RunTab({ session, view, onStartRun, onExit }: { session: Session; view:
       )}
       {msg && <p className="sub" role="status">{msg}</p>}
 
-      <h3>Screen colors</h3>
-      <div className="swatches">
+      {gb && <h3>Screen colors</h3>}
+      {gb && <div className="swatches">
         {PALETTES.map((pal) => (
           <button key={pal.id} className="swatch" aria-pressed={p.palette === pal.id} onClick={() => setPref({ palette: pal.id })}>
             <span className="chips">
@@ -828,7 +859,7 @@ function RunTab({ session, view, onStartRun, onExit }: { session: Session; view:
             {pal.name}
           </button>
         ))}
-      </div>
+      </div>}
 
       <h3>Device</h3>
       <div className="field">
@@ -848,7 +879,7 @@ function RunTab({ session, view, onStartRun, onExit }: { session: Session; view:
         <span>
           <span className="lbl">Emulator</span>
           <div className="hint">
-            Rust, compiled to WebAssembly{view.emuMs != null && ` · ${view.emuMs.toFixed(2)} ms per frame`}
+            {gb ? 'Rust' : 'Game Boy Advance core in Rust'}, compiled to WebAssembly{view.emuMs != null && ` · ${view.emuMs.toFixed(2)} ms per frame`}
           </div>
         </span>
       </div>
@@ -856,7 +887,7 @@ function RunTab({ session, view, onStartRun, onExit }: { session: Session; view:
       <h3>In-game save</h3>
       <p className="sub">Back up your .sav file, or bring one from another emulator or a cartridge dump.</p>
       <div className="btn-row">
-        <button className="btn" onClick={download}>
+        <button className="btn" onClick={download} disabled={session.system === 'gba' && !session.hasSave}>
           Download .sav
         </button>
         <button className="btn" onClick={() => fileRef.current?.click()}>
@@ -927,7 +958,7 @@ function RunTab({ session, view, onStartRun, onExit }: { session: Session; view:
         </button>
       </div>
       <p className="sub" style={{ marginTop: 16 }}>
-        {view.version ? `Pokémon ${view.version[0].toUpperCase()}${view.version.slice(1)}` : session.rom.title}, running at {view.fps} fps.
+        {view.version ? `Pokémon ${versionLabel(view.version)}` : session.rom.title}, running at {view.fps} fps.
       </p>
     </div>
   );

@@ -1,27 +1,27 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
-import type { Session } from '../platform/session.ts';
 import { Controls, useGamepad, useKeyboard } from './Controls.tsx';
 import { hpClass, routeInfo, routeLine, xpFraction } from './derive.ts';
 import { GrindModal } from './GrindModal.tsx';
 import { NewRunModal } from './NewRunModal.tsx';
 import { prefs } from './prefs.ts';
-import { Sheet, type TabId } from './Sheet.tsx';
+import { Sheet, type PlaySession, type TabId } from './Sheet.tsx';
 import { Sprite } from './Sprite.tsx';
 
-export function Play({ session, onExit }: { session: Session; onExit: () => void }) {
+export function Play({ session, onExit }: { session: PlaySession; onExit: () => void }) {
   const view = useSyncExternalStore(session.subscribe, session.getView);
   const p = useSyncExternalStore(prefs.subscribe, prefs.get);
   const [sheet, setSheet] = useState<TabId | null>(null);
   const [newRun, setNewRun] = useState(false);
   const [grindSetup, setGrindSetup] = useState(false);
   const data = session.data;
+  const gba = session.system === 'gba';
   const { snap, run } = view;
   const info = routeInfo(data, run, snap);
   const isDesktop = typeof window !== 'undefined' && window.matchMedia('(min-width: 1000px) and (min-height: 600px) and (hover: hover)').matches;
   const sheetOpen = sheet !== null || isDesktop;
 
-  useKeyboard(session, !newRun && !grindSetup);
-  useGamepad(session);
+  useKeyboard(session, !newRun && !grindSetup, gba);
+  useGamepad(session, gba);
 
   useEffect(() => {
     session.setPalette(p.palette);
@@ -68,7 +68,7 @@ export function Play({ session, onExit }: { session: Session; onExit: () => void
 
   const onChip = () => {
     if (!run && data) setNewRun(true);
-    else openSheet('route');
+    else openSheet(data ? 'route' : 'run');
   };
 
   const cap = view.milestone;
@@ -78,7 +78,7 @@ export function Play({ session, onExit }: { session: Session; onExit: () => void
   const grindEnd = view.grindEnd;
 
   return (
-    <div className="play" onPointerDown={() => void session.audio.unlock()}>
+    <div className={`play${gba ? ' gba' : ''}${data ? '' : ' no-team'}`} onPointerDown={() => void session.audio.unlock()}>
       <div className="strip">
         <button className="icon-btn" onClick={onExit} aria-label="Back to library">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
@@ -111,7 +111,7 @@ export function Play({ session, onExit }: { session: Session; onExit: () => void
             </span>
             <span className="txt">
               <span className="area">{data ? info.area : session.rom.name}</span>
-              <span className="state">{data ? routeLine(info, data) : 'Tracking unavailable for this game'}</span>
+              <span className="state">{data ? routeLine(info, data) : gba ? 'Game Boy Advance' : 'Tracking unavailable for this game'}</span>
             </span>
           </button>
         )}
@@ -177,8 +177,17 @@ export function Play({ session, onExit }: { session: Session; onExit: () => void
 
       <div className="lower">
         {view.warnings.length > 0 && <div className="warn-bar" role="status">{view.warnings[0]}</div>}
-        <Controls session={session} speed={view.speed} onMenu={() => openSheet()} onGrind={data ? () => setGrindSetup(true) : undefined} />
-        <p className="keys-hint">Arrows move, X is A, Z is B, Enter is Start, Shift is Select. Space changes speed, P pauses.</p>
+        <Controls
+          session={session}
+          speed={view.speed}
+          onMenu={() => openSheet()}
+          onGrind={session.system === 'gb' && data ? () => setGrindSetup(true) : undefined}
+          shoulders={gba}
+          menuLabel={gba && !data ? 'Menu' : undefined}
+        />
+        <p className="keys-hint">
+          Arrows move, X is A, Z is B, {gba && 'Q and E are L and R, '}Enter is Start, Shift is Select. Space changes speed, P pauses.
+        </p>
       </div>
 
       <div className="toasts" aria-live="polite">
@@ -207,7 +216,7 @@ export function Play({ session, onExit }: { session: Session; onExit: () => void
       )}
 
       {newRun && data && <NewRunModal session={session} onClose={() => setNewRun(false)} />}
-      {grindSetup && data && <GrindModal session={session} onClose={() => setGrindSetup(false)} />}
+      {grindSetup && session.system === 'gb' && <GrindModal session={session} onClose={() => setGrindSetup(false)} />}
     </div>
   );
 }

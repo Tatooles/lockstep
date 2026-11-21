@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Gen1Data, Species } from '../gen1/rom.ts';
+import { Gen1Data, type Species } from '../gen1/rom.ts';
 import { SYMBOLS } from '../gen1/symbols.ts';
 import { EventDiffer, Gen1Reader, type Ram } from '../gen1/watcher.ts';
 import { applyEvent, newRun, syncMons, usedAreas } from './engine.ts';
@@ -96,11 +96,13 @@ const species = new Map<number, Species>([
   [RATTATA, sp(RATTATA, 19, 'Rattata', 19)],
   [WEEDLE, sp(WEEDLE, 13, 'Weedle', 13)],
 ]);
-const data = {
+// Gen1Data's own Dex methods over a few hand-made species.
+const data: Gen1Data = Object.assign(Object.create(Gen1Data.prototype) as Gen1Data, {
   species,
-  speciesName: (i: number) => species.get(i)?.name ?? `#${i}`,
   trainerClasses: [],
-} as unknown as Gen1Data;
+  items: [],
+  version: 'red',
+});
 
 function harness() {
   const game = new FakeGame();
@@ -111,7 +113,7 @@ function harness() {
   const step = () => {
     const snap = reader.read(game);
     for (const ev of differ.update(snap)) notices.push(...applyEvent(run, ev, { data, snap }));
-    syncMons(run, snap);
+    syncMons(run, snap, data);
     return snap;
   };
   return { game, run, notices, step };

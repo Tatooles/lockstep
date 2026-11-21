@@ -2,8 +2,14 @@
 // out of the player's own ROM using disassembly symbol offsets.
 
 import { parseHeader } from '../core/header.ts';
+import type { Dex } from '../run/dex.ts';
+import type { Rules, Run } from '../run/types.ts';
+import { spriteUrl } from '../ui/sprites.ts';
+import { levelProgress } from './exp.ts';
+import { MAPS } from './maps.ts';
 import { SYMBOLS, type Gen1Symbols } from './symbols.ts';
 import { decodeText, decodeTextLen, prettyName } from './text.ts';
+import { TYPE_COLORS, typeName } from './types.ts';
 
 export type Gen1Version = 'red' | 'blue' | 'yellow';
 
@@ -83,7 +89,16 @@ export function detectVersion(rom: Uint8Array): Gen1Version | null {
   return v;
 }
 
-export class Gen1Data {
+const OAKS_LAB = 40;
+const BADGE_NAMES = ['Boulder', 'Cascade', 'Thunder', 'Rainbow', 'Soul', 'Marsh', 'Volcano', 'Earth'];
+/** Poké, Great, Ultra and Master Ball; Safari Balls (8) are thrown too but don't count as having balls. */
+const CATCH_BALLS = [0x01, 0x02, 0x03, 0x04];
+const BALLS = new Set([...CATCH_BALLS, 0x08]);
+/** Scripted battles that never count as encounters (old man tutorial; Yellow's intro battles). */
+const SCRIPTED_BATTLE_TYPES = new Set([1, 3, 4]);
+
+export class Gen1Data implements Dex {
+  readonly gen = 1 as const;
   readonly version: Gen1Version;
   readonly sym: Gen1Symbols;
   readonly rom: Uint8Array;
@@ -366,5 +381,73 @@ export class Gen1Data {
       parties.push({ cls, no: parties.length + 1, mons });
     }
     return parties;
+  }
+
+  // ---- Dex ----
+  family(species: number): number | undefined {
+    return this.species.get(species)?.family;
+  }
+
+  xpProgress(species: number, level: number, exp: number) {
+    const growth = this.species.get(species)?.growth;
+    return growth === undefined ? undefined : levelProgress(growth, level, exp);
+  }
+
+  typeName(type: number): string {
+    return typeName(type);
+  }
+
+  typeColor(type: number): string | undefined {
+    return TYPE_COLORS[type];
+  }
+
+  move(id: number) {
+    return this.moves[id];
+  }
+
+  trainerClassName(cls: number): string | undefined {
+    return this.trainerClasses[cls];
+  }
+
+  itemName(id: number): string | undefined {
+    return this.items[id];
+  }
+
+  areaOf(mapId: number, rules: Rules): string {
+    const m = MAPS[mapId];
+    if (!m) return `Map ${mapId}`;
+    return rules.areaGrouping === 'area' ? m.area : m.name;
+  }
+
+  mapName(mapId: number): string {
+    return MAPS[mapId]?.name ?? `Map ${mapId}`;
+  }
+
+  areaHasWild(area: string, rules: Rules): boolean {
+    return MAPS.some((m) => this.areaOf(m.id, rules) === area && !!this.wild(m.id));
+  }
+
+  isStarter(mapId: number, run: Run): boolean {
+    return mapId === OAKS_LAB && !Object.values(run.mons).some((x) => x.origin !== 'baseline');
+  }
+
+  badgeName(index: number): string {
+    return BADGE_NAMES[index] ?? `Badge ${index + 1}`;
+  }
+
+  hasPokeBalls(bag: Record<number, number>): boolean {
+    return CATCH_BALLS.some((id) => (bag[id] ?? 0) > 0);
+  }
+
+  isBall(item: number): boolean {
+    return BALLS.has(item);
+  }
+
+  scriptedBattle(battleType: number): boolean {
+    return SCRIPTED_BATTLE_TYPES.has(battleType);
+  }
+
+  spriteUrl(species: number): string | null {
+    return spriteUrl(this, species);
   }
 }

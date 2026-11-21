@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { GbaSession } from '../gba/session.ts';
 import { Session } from '../platform/session.ts';
 import { db, type RomRecord } from '../platform/storage.ts';
-import { GbaPlay } from './GbaPlay.tsx';
 import { Library } from './Library.tsx';
 import { Play } from './Play.tsx';
 
@@ -34,7 +33,6 @@ export function App() {
     if (!session) document.title = 'Lockstep';
   }, [session]);
 
-  if (session instanceof GbaSession) return <GbaPlay session={session} onExit={close} />;
   if (session) return <Play session={session} onExit={close} />;
   return <Library onOpen={open} opening={opening} error={error} />;
 }
