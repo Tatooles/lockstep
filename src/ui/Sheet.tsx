@@ -753,7 +753,7 @@ function RunTab({ session, view, onStartRun, onExit }: { session: PlaySession; v
         </>
       )}
 
-      {session.system === 'gb' && session.data && (
+      {session.data && (
         <>
           <h3>Game helpers</h3>
           <Toggle

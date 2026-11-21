@@ -2,12 +2,16 @@
 // tracker (Gen 3 Pokémon) + persistence. Exposes the same view and methods as
 // platform/session.ts, so the play screen works with either.
 
+import type { GrindEnd } from '../bot/grinder.ts';
+import { dexOwned, Grinder3, repelCounter } from '../bot/grinder3.ts';
 import { Button, Shoulder } from '../core/constants.ts';
 import { Gen3Reader, workRam, type Mem } from '../gen3/reader.ts';
 import { detectGen3, Gen3Data } from '../gen3/rom.ts';
 import { AudioOut } from '../platform/audio.ts';
-import { SPEEDS, type SessionView } from '../platform/session.ts';
+import { SPEEDS, type GrindSettings, type SessionView } from '../platform/session.ts';
 import { db, type RomRecord, type StateRecord } from '../platform/storage.ts';
+import { ScreenWake } from '../platform/wake.ts';
+import type { Snapshot } from '../run/events.ts';
 import { Tracker } from '../run/tracker.ts';
 import type { Rules, Run } from '../run/types.ts';
 import { AUDIO_RATE, GBA_FPS, GBA_H, GBA_W, Key, type Gba } from './gba.ts';
@@ -34,8 +38,21 @@ export const THUMB_H = GBA_H / 2;
 const FRAME_MS = 1000 / GBA_FPS;
 /** Read the game's state for the tracker every this many frames. */
 const TRACK_EVERY = 4;
-/** Main-thread time per animation frame we'll spend emulating. */
+/**
+ * Main-thread time per animation frame we'll spend emulating, at least. At a
+ * lower display rate (iOS Low Power Mode caps requestAnimationFrame at 30 Hz)
+ * each callback has more time and more frames to run, so the budget grows with it.
+ */
 const BUDGET_MS = 13;
+/** Main-thread time per animation frame spent emulating while auto-grind runs. */
+const GRIND_BUDGET_MS = 12;
+/**
+ * At normal speed, lock to the display when its refresh is within this share
+ * of a whole number of GBA frames (60 Hz: 1, 30 Hz: 2): run exactly that many
+ * per refresh. The GBA's 59.73 Hz is 0.45% off 60 Hz; the audio rate control
+ * absorbs the difference instead of a frame being repeated every few seconds.
+ */
+const VSYNC_TOLERANCE = 0.02;
 
 export class GbaSession {
   readonly gba: Gba;
@@ -70,7 +87,16 @@ export class GbaSession {
   private emuTime = 0;
   private emuFrames = 0;
   private emuMs: number | null = null;
+  /** Smoothed time between animation frames. */
+  private vsyncMs = 0;
   private clockAt = 0;
+  /** Endless Repel: keep the game's repel step counter topped up. */
+  private repel = false;
+  private repelApplied = false;
+  private grinder: Grinder3 | null = null;
+  private grindEnd: SessionView['grindEnd'] = null;
+  private grindStartedAt = 0;
+  private readonly wake = new ScreenWake();
 
   private view: SessionView;
   private listeners = new Set<() => void>();
@@ -91,7 +117,11 @@ export class GbaSession {
     this.reader = this.data ? new Gen3Reader(this.data) : null;
     this.mem = workRam(gba.ewram, gba.iwram);
     // The game sets its battle flag after the intro transition, so starts need no long hold.
-    this.tracker = new Tracker(this.data, rom.key, this.data?.readMilestones() ?? [], () => this.publish(), { wildStartDelay: 2 });
+    // While the bot plays, the grind chip says what's going on; info notices would only pile up.
+    this.tracker = new Tracker(this.data, rom.key, this.data?.readMilestones() ?? [], () => this.publish(), {
+      wildStartDelay: 2,
+      mute: (n) => !!this.grinder && n.tone === 'info',
+    });
     this.view = this.buildView();
     document.addEventListener('visibilitychange', this.onVis);
     window.addEventListener('pagehide', this.onHide);
@@ -133,8 +163,8 @@ export class GbaSession {
       fps: this.fps,
       muted: this.muted,
       version: this.data?.version ?? null,
-      grind: null,
-      grindEnd: null,
+      grind: this.grinder ? { ...this.grinder.getProgress() } : null,
+      grindEnd: this.grindEnd,
       emuMs: this.emuMs,
       rev: this.rev,
     };
@@ -185,12 +215,17 @@ export class GbaSession {
     let dt = now - this.last;
     this.last = now;
     if (dt > 100) dt = FRAME_MS; // came back from a stall: don't spiral
+    else if (dt > 0) this.vsyncMs = this.vsyncMs ? this.vsyncMs * 0.95 + dt * 0.05 : dt;
     if (this.paused || this.hidden) return;
     const gba = this.gba;
     // The cartridge clock reads whatever the host last set.
     if (now - this.clockAt > 1000) {
       this.clockAt = now;
       gba.setTime(new Date());
+    }
+    if (this.grinder) {
+      this.tickGrind(now);
+      return;
     }
     const audioOn = this.speed === 1 && !this.muted && this.audio.ready;
     if (audioOn !== this.audioWasOn) {
@@ -199,10 +234,23 @@ export class GbaSession {
       this.resampler.reset();
       this.audioWasOn = audioOn;
     }
-    this.acc += dt * this.speed;
-    // Frames due now, capped to what fits the time budget at the recent cost per frame.
-    const due = Math.floor(this.acc / FRAME_MS);
-    const n = Math.min(due, Math.max(1, Math.floor(BUDGET_MS / Math.max(this.emuMs ?? 1, 0.05))));
+    const budget = Math.min(Math.max(BUDGET_MS, this.vsyncMs * 0.8), 40);
+    const perRefresh = Math.round(this.vsyncMs / FRAME_MS);
+    const locked = this.speed === 1 && perRefresh >= 1 && Math.abs(this.vsyncMs - perRefresh * FRAME_MS) <= perRefresh * FRAME_MS * VSYNC_TOLERANCE;
+    let due: number;
+    let n: number;
+    if (locked) {
+      // A whole number of frames per refresh (more after a dropped one), however
+      // long the last few frames took: an even cadence doesn't depend on estimates.
+      due = Math.min(Math.max(1, Math.round(dt / FRAME_MS)), perRefresh * 3);
+      n = due;
+      this.acc = 0;
+    } else {
+      this.acc += dt * this.speed;
+      // Frames due now, capped to what fits the time budget at the recent cost per frame.
+      due = Math.floor(this.acc / FRAME_MS);
+      n = Math.min(due, Math.max(1, Math.floor(budget / Math.max(this.emuMs ?? 1, 0.05))));
+    }
     const t0 = performance.now();
     gba.setKeys(this.keys);
     let frames = 0;
@@ -210,13 +258,13 @@ export class GbaSession {
       // Only the frame we show needs drawing.
       gba.render = frames === n - 1;
       gba.runFrame();
-      this.acc -= FRAME_MS;
+      if (!locked) this.acc -= FRAME_MS;
       frames++;
       if (++this.frameNo % TRACK_EVERY === 0) this.track();
-      if (performance.now() - t0 > BUDGET_MS) break;
+      if (performance.now() - t0 > budget) break;
     }
     // Falling behind (slow device, or a budget overrun): drop the debt rather than spiral.
-    if (frames < due) this.acc = Math.min(this.acc, FRAME_MS);
+    if (!locked && frames < due) this.acc = Math.min(this.acc, FRAME_MS);
     if (frames > 0) {
       this.emuTime += performance.now() - t0;
       this.emuFrames += frames;
@@ -224,12 +272,122 @@ export class GbaSession {
       this.fpsFrames += frames;
       if (audioOn) this.flushAudio();
     }
-    if (now - this.fpsAt > 1000) {
-      this.fps = Math.round((this.fpsFrames * 1000) / (now - this.fpsAt));
-      this.fpsFrames = 0;
-      this.fpsAt = now;
-      if (this.emuFrames > 0) this.emuMs = this.emuTime / this.emuFrames;
-      this.emuTime = this.emuFrames = 0;
+    this.stats(now);
+    if (now - this.publishAt > 250) {
+      this.publishAt = now;
+      this.tracker.expireToasts(now);
+      this.publish();
+    }
+  }
+
+  /** Frames shown per second and the average emulation cost per frame, over the last second. */
+  private stats(now: number): void {
+    if (now - this.fpsAt <= 1000) return;
+    this.fps = Math.round((this.fpsFrames * 1000) / (now - this.fpsAt));
+    this.fpsFrames = 0;
+    this.fpsAt = now;
+    if (this.emuFrames > 0) this.emuMs = this.emuTime / this.emuFrames;
+    this.emuTime = this.emuFrames = 0;
+  }
+
+  // ---- auto-grind ----
+
+  /** Why auto-grind can't start right now, or null. */
+  grindProblem(targetLevel: number): string | null {
+    if (!this.data) return 'Auto-grind works with Pokémon Ruby, Sapphire, Emerald, FireRed and LeafGreen.';
+    return Grinder3.problem(this.mem, this.data, targetLevel);
+  }
+
+  startGrind(settings: GrindSettings): string | null {
+    const problem = this.grindProblem(settings.targetLevel);
+    if (problem || !this.data) return problem;
+    this.keys = 0;
+    this.gba.setKeys(0);
+    this.grinder = new Grinder3(this.mem, this.data, (a, v) => this.gba.x.poke8(a, v), {
+      ...settings,
+      handBack: (snap) => this.grindHandBack(snap),
+    });
+    this.grindEnd = null;
+    this.grindStartedAt = performance.now();
+    this.paused = false;
+    this.acc = 0;
+    this.clearAudio();
+    void this.wake.set(true);
+    this.publish();
+    return null;
+  }
+
+  /** Stop the bot. A user stop doesn't pause or show a summary. */
+  stopGrind(): void {
+    if (!this.grinder) return;
+    this.grinder.dispose();
+    this.grinder = null;
+    this.gba.setKeys(this.keys);
+    this.clearAudio();
+    void this.wake.set(false);
+    this.publish();
+  }
+
+  dismissGrindEnd(): void {
+    this.setPaused(false);
+  }
+
+  get grinding(): boolean {
+    return this.grinder !== null;
+  }
+
+  /** A wild battle worth a human: the area's first encounter, or (with no run) a species not caught yet. */
+  private grindHandBack(snap: Snapshot): string | null {
+    const data = this.data;
+    const enemy = snap.enemy;
+    if (!data || !enemy) return null;
+    const name = data.speciesName(enemy.species);
+    const run = this.tracker.run;
+    if (run) {
+      const enc = run.encounters.find((e) => e.id === run.activeEncounterId);
+      return enc?.outcome === 'pending' ? `Wild ${name}: your first encounter on ${enc.area}. It's all yours.` : null;
+    }
+    return dexOwned(this.mem, data, enemy.species) === false ? `Wild ${name}: you haven't caught one yet.` : null;
+  }
+
+  private tickGrind(now: number): void {
+    const gba = this.gba;
+    const grinder = this.grinder!;
+    if (this.audioWasOn !== false) {
+      gba.audio = false;
+      gba.discardAudio();
+      this.resampler.reset();
+      this.audioWasOn = false;
+    }
+    // As many frames as fit the budget at the recent cost per frame; draw the last.
+    const n = Math.max(1, Math.floor(GRIND_BUDGET_MS / Math.max(this.emuMs ?? 1, 0.05)));
+    const t0 = performance.now();
+    let frames = 0;
+    let end: GrindEnd | null = null;
+    while (frames < n) {
+      gba.setKeys(grinder.keys);
+      gba.render = frames === n - 1;
+      gba.runFrame();
+      frames++;
+      if (++this.frameNo % TRACK_EVERY === 0) this.track();
+      end = grinder.step();
+      if (end || performance.now() - t0 > GRIND_BUDGET_MS) break;
+    }
+    if (end && frames < n) {
+      // Stopped before the frame that gets drawn: draw the moment it stopped on.
+      gba.setKeys(0);
+      gba.render = true;
+      gba.runFrame();
+    }
+    this.acc = 0;
+    this.emuTime += performance.now() - t0;
+    this.emuFrames += frames;
+    this.present();
+    this.fpsFrames += frames;
+    this.stats(now);
+    if (end) {
+      this.finishGrind(end);
+      return;
     }
     if (now - this.publishAt > 250) {
       this.publishAt = now;
@@ -238,14 +396,50 @@ export class GbaSession {
     }
   }
 
+  private finishGrind(end: GrindEnd): void {
+    const p = this.grinder!.getProgress();
+    this.grinder!.dispose();
+    this.grinder = null;
+    this.gba.setKeys(this.keys);
+    void this.wake.set(false);
+    const parts = [p.level > p.startLevel ? `Lv ${p.startLevel} → ${p.level}` : `Lv ${p.level}`, `${p.battles} ${p.battles === 1 ? 'battle' : 'battles'}`];
+    const secs = Math.round((performance.now() - this.grindStartedAt) / 1000);
+    parts.push(secs < 90 ? `${secs}s` : `${Math.round(secs / 60)} min`);
+    this.grindEnd = { ...end, summary: parts.join(' · ') };
+    // Freeze on the moment that needs you (an evolution keeps animating otherwise).
+    this.paused = true;
+    this.clearAudio();
+    if ('vibrate' in navigator) navigator.vibrate?.(end.kind === 'done' ? 30 : [30, 60, 30]);
+    this.publish();
+  }
+
   // ---- tracker ----
   private track(): void {
     if (!this.reader) return;
     const snap = this.reader.read(this.mem);
     if (!snap.valid) return;
+    this.applyRepel();
     const changed = this.tracker.observe(snap);
     if (this.tracker.run?.rules.forceSetMode) this.reader.setBattleStyle(this.mem, (a, v) => this.gba.x.poke8(a, v));
     if (changed) this.publish();
+  }
+
+  /**
+   * The game skips wild Pokémon weaker than your lead while its repel step
+   * counter (VAR_REPEL_STEP_COUNT) is above zero, so holding it up is a Repel
+   * that never wears off. Turning it off clears the counter only if this session set it.
+   */
+  private applyRepel(): void {
+    if (!this.data) return;
+    const a = repelCounter(this.mem, this.data);
+    if (a === null) return;
+    if (this.repel) {
+      if (this.mem.u16(a) < 200) this.gba.x.poke16(a, 250);
+      this.repelApplied = true;
+    } else if (this.repelApplied) {
+      this.gba.x.poke16(a, 0);
+      this.repelApplied = false;
+    }
   }
 
   dismissToast(id: number): void {
@@ -265,12 +459,11 @@ export class GbaSession {
     this.tracker.updateRun(mut);
   }
 
-  // Game Boy only for now (palettes) or not yet on GBA (Endless Repel, auto-grind).
+  // Game Boy only (palettes).
   setPalette(_id: string): void {}
-  setRepel(_on: boolean): void {}
-  stopGrind(): void {}
-  dismissGrindEnd(): void {
-    this.setPaused(false);
+
+  setRepel(on: boolean): void {
+    this.repel = on;
   }
 
   private flushAudio(): void {
@@ -278,11 +471,12 @@ export class GbaSession {
     const read = x.audio_read_pos();
     const write = x.audio_write_pos();
     if (read === write) return;
-    // Nudge the output rate to hold ~60ms of audio queued.
+    // Nudge the output rate to hold ~60ms of audio queued. Locked to a 60 Hz
+    // display the core runs 0.45% fast; this settles that at about 80ms.
     const sr = this.audio.sampleRate;
     const target = sr * 0.06;
     const err = (target - this.audio.buffered) / target;
-    const outRate = sr * (1 + Math.max(-0.006, Math.min(0.006, err * 0.006)));
+    const outRate = sr * (1 + Math.max(-0.006, Math.min(0.006, err * 0.012)));
     const { l, r } = this.resampler.drain(this.gba.audioRing, read, write, AUDIO_RATE / outRate);
     x.audio_set_read_pos(write);
     if (l.length) this.audio.push(l, r);
@@ -297,6 +491,12 @@ export class GbaSession {
 
   // ---- input & controls ----
   press(button: number, down: boolean): void {
+    // Any button takes over from the bot, or resumes play after it handed back.
+    if (this.grinder) {
+      if (!down) return;
+      this.stopGrind();
+    }
+    if (down && this.grindEnd) this.dismissGrindEnd();
     const bit = KEY_BIT[button];
     if (bit === undefined) return;
     this.keys = down ? this.keys | bit : this.keys & ~bit;
@@ -318,6 +518,8 @@ export class GbaSession {
 
   setPaused(p: boolean): void {
     this.paused = p;
+    // Resuming, however it happens, means the hand-back card has been seen.
+    if (!p) this.grindEnd = null;
     if (p) this.clearAudio();
     this.last = performance.now();
     this.acc = 0;
@@ -332,6 +534,7 @@ export class GbaSession {
 
   /** Power cycle, keeping the in-game save. */
   reset(): void {
+    this.stopGrind();
     this.gba.reset();
     this.gba.setTime(new Date());
     this.tracker.resync();
@@ -371,6 +574,7 @@ export class GbaSession {
     if (!this.canUseStates()) throw new Error('Save states are disabled for this run');
     const rec = await db.getState<Uint8Array>(this.rom.key, slot);
     if (!rec) return false;
+    this.stopGrind();
     this.gba.loadState(rec.state);
     this.gba.setTime(new Date());
     this.tracker.resync();
@@ -414,6 +618,8 @@ export class GbaSession {
 
   private handleShow(): void {
     this.hidden = false;
+    // The browser drops wake locks when the page hides.
+    if (this.grinder) this.wake.reacquire();
     this.last = performance.now();
     this.acc = 0;
     this.clearAudio();
@@ -440,6 +646,7 @@ export class GbaSession {
   }
 
   async destroy(): Promise<void> {
+    this.stopGrind();
     this.destroyed = true;
     cancelAnimationFrame(this.raf);
     clearInterval(this.sramTimer);

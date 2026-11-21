@@ -77,6 +77,8 @@ export interface Gen3Move extends DexMove {
   effect: number;
   power: number;
   accuracy: number;
+  /** Move priority (+1 Quick Attack, −6 Roar…). */
+  priority: number;
 }
 
 /** One kind of wild encounter in an area: slots with their odds and level ranges. */
@@ -265,6 +267,7 @@ export class Gen3Data implements Dex {
         type: this.u8(p + 2),
         accuracy: this.u8(p + 3),
         pp: this.u8(p + 4),
+        priority: (this.u8(p + 7) << 24) >> 24,
       });
     }
   }
@@ -422,6 +425,11 @@ export class Gen3Data implements Dex {
       this.dexStride = [32, 36].find((n) => this.u16(p + n + 12) === 7 && this.u16(p + n + 14) === 69) ?? 0;
     }
     return dex > 0 && this.dexStride ? this.u16(p + dex * this.dexStride + 14) : 0;
+  }
+
+  /** Whether walking on this map can find wild Pokémon (grass, caves). */
+  hasLandWild(mapId: number): boolean {
+    return this.mapWild(mapId).some((g) => g.kind === 'land');
   }
 
   /** The wild Pokémon on one map, by encounter kind. */

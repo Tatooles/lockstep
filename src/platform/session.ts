@@ -12,6 +12,7 @@ import { Tracker, type Milestone, type ToastItem } from '../run/tracker.ts';
 import type { Rules, Run } from '../run/types.ts';
 import { AudioOut } from './audio.ts';
 import { packPalette, paletteById } from './palettes.ts';
+import { ScreenWake } from './wake.ts';
 import { db, type RomRecord } from './storage.ts';
 
 export const SPEEDS = [1, 2, 4, 8] as const;
@@ -77,7 +78,7 @@ export class Session {
   private grinder: Grinder | null = null;
   private grindEnd: SessionView['grindEnd'] = null;
   private grindStartedAt = 0;
-  private wakeLock: { release: () => Promise<void> } | null = null;
+  private readonly wake = new ScreenWake();
   private fpsFrames = 0;
   private fpsAt = 0;
   private fps = 0;
@@ -292,7 +293,7 @@ export class Session {
     this.paused = false;
     this.acc = 0;
     this.audio.clear();
-    void this.keepAwake(true);
+    void this.wake.set(true);
     this.publish();
     return null;
   }
@@ -302,7 +303,7 @@ export class Session {
     if (!this.grinder) return;
     this.grinder.dispose();
     this.grinder = null;
-    void this.keepAwake(false);
+    void this.wake.set(false);
     this.publish();
   }
 
@@ -371,7 +372,7 @@ export class Session {
     const p = this.grinder!.getProgress();
     this.grinder!.dispose();
     this.grinder = null;
-    void this.keepAwake(false);
+    void this.wake.set(false);
     const parts = [p.level > p.startLevel ? `Lv ${p.startLevel} → ${p.level}` : `Lv ${p.level}`, `${p.battles} ${p.battles === 1 ? 'battle' : 'battles'}`];
     const secs = Math.round((performance.now() - this.grindStartedAt) / 1000);
     parts.push(secs < 90 ? `${secs}s` : `${Math.round(secs / 60)} min`);
@@ -381,22 +382,6 @@ export class Session {
     this.audio.clear();
     if ('vibrate' in navigator) navigator.vibrate?.(end.kind === 'done' ? 30 : [30, 60, 30]);
     this.publish();
-  }
-
-  /** Hold a screen wake lock while the bot plays, where the browser supports it. */
-  private async keepAwake(on: boolean): Promise<void> {
-    try {
-      if (on && !this.wakeLock) {
-        const wl = (navigator as Navigator & { wakeLock?: { request(t: 'screen'): Promise<{ release: () => Promise<void> }> } }).wakeLock;
-        this.wakeLock = (await wl?.request('screen')) ?? null;
-      } else if (!on && this.wakeLock) {
-        const lock = this.wakeLock;
-        this.wakeLock = null;
-        await lock.release();
-      }
-    } catch {
-      this.wakeLock = null;
-    }
   }
 
   private flushAudio(): void {
@@ -568,10 +553,7 @@ export class Session {
   private handleShow(): void {
     this.hidden = false;
     // The browser drops wake locks when the page hides.
-    if (this.grinder) {
-      this.wakeLock = null;
-      void this.keepAwake(true);
-    }
+    if (this.grinder) this.wake.reacquire();
     this.last = performance.now();
     this.acc = 0;
     this.audio.clear();

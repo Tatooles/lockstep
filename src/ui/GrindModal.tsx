@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { Session } from '../platform/session.ts';
+import type { PlaySession } from './Sheet.tsx';
 import { Sprite } from './Sprite.tsx';
 
 const USE_POTIONS_KEY = 'lockstep:grindPotions';
@@ -12,7 +12,7 @@ function readPotionsPref(): boolean {
   }
 }
 
-export function GrindModal({ session, onClose }: { session: Session; onClose: () => void }) {
+export function GrindModal({ session, onClose }: { session: PlaySession; onClose: () => void }) {
   const view = session.getView();
   const lead = view.snap?.party[0];
   const cap = view.milestone?.ace ?? null;

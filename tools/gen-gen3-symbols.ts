@@ -46,6 +46,31 @@ const ROM: Record<string, string[]> = {
   abilityNames: ['gAbilityNames'],
   mapGroups: ['gMapGroups'],
   pokedexEntries: ['gPokedexEntries'],
+  // Auto-grind: which screen is up (function pointers the game keeps in RAM).
+  cb1Overworld: ['CB1_Overworld'],
+  cb2Overworld: ['CB2_Overworld'],
+  cb2Battle: ['BattleMainCB2'],
+  cb2Evolution: ['CB2_EvolutionSceneUpdate'],
+  evolutionTask: ['Task_EvolutionScene'],
+  // The player's battle controller (the first definition is battle_controller_player.c's).
+  chooseAction: ['HandleInputChooseAction'],
+  chooseMove: ['HandleInputChooseMove'],
+  chooseTarget: ['HandleInputChooseTarget'],
+  textWait: ['CompleteOnInactiveTextPrinter'],
+  textWait2: ['CompleteOnInactiveTextPrinter2'],
+  chooseMon: ['WaitForMonSelection'],
+  startMenuInput: ['HandleStartMenuInput', 'StartCB_HandleInput', 'StartMenu_InputProcessCallback'],
+  startMenuTask: ['Task_ShowStartMenu', 'Task_StartMenuHandleInput', 'sub_80712B4'],
+  // Ruby/Sapphire's are unnamed in pokeruby: sub_80A50C8 is the bag list, sub_80A5414 the item's
+  // USE/GIVE menu, sub_808B0C0 the party menu's input and sub_806FB44 its "HP was restored" wait.
+  bagInput: ['Task_BagMenu_HandleInput', 'sub_80A50C8'],
+  itemContext: ['Task_ItemContext_MultipleRows', 'Task_FieldItemContextMenuHandleInput', 'sub_80A5414'],
+  itemContext2: ['Task_ItemContext_SingleRow'],
+  partyInput: ['Task_HandleChooseMonInput', 'sub_808B0C0'],
+  partyMessage: ['sub_806FB44'],
+  // FR/LG's item-use animation (waits for A after "POTION was used on…").
+  itemUseAnim: ['Task_UseItem_Normal'],
+  tileBitAttributes: ['sTileBitAttributes'],
 };
 // RAM symbols (the same for every revision of a family; checked below).
 const RAM: Record<string, string[]> = {
@@ -67,6 +92,23 @@ const RAM: Record<string, string[]> = {
   trainerOpponent: ['gTrainerBattleOpponent_A', 'gTrainerBattleOpponent'],
   battleWeather: ['gBattleWeather'],
   sideStatuses: ['gSideStatuses'],
+  battlerControllerFuncs: ['gBattlerControllerFuncs'],
+  actionCursor: ['gActionSelectionCursor'],
+  moveCursor: ['gMoveSelectionCursor'],
+  battleScriptPtr: ['gBattlescriptCurrInstr'],
+  tasks: ['gTasks'],
+  textPrinters: ['sTextPrinters'],
+  backupMapLayout: ['gBackupMapLayout', 'VMap'],
+  specialVarItemId: ['gSpecialVar_ItemId'],
+  bagPosition: ['gBagPosition', 'gBagMenuState'],
+  bagPocket: ['sCurrentBagPocket'],
+  bagScroll: ['gBagPocketScrollStates'],
+  partyMenu: ['gPartyMenu'],
+  sprites: ['gSprites'],
+  startMenuCallback: ['gMenuCallback', 'sStartMenuCallback'],
+  startMenuCursor: ['sStartMenuCursorPos'],
+  startMenuCount: ['sNumStartMenuActions', 'sNumStartMenuItems'],
+  startMenuActions: ['sCurrentStartMenuActions', 'sStartMenuOrder'],
 };
 
 function load(repo: string, file: string): Map<string, number> {
@@ -90,6 +132,8 @@ async function ensure(repo: string, file: string): Promise<void> {
 
 const hex = (n: number) => `0x${n.toString(16).padStart(8, '0')}`;
 const out: string[] = [];
+/** ROM symbols some variant lacks: optional in the interface. */
+const partial = new Set<string>();
 const ramByFamily = new Map<string, Record<string, number>>();
 for (const v of VARIANTS) {
   await ensure(v.repo, v.file);
@@ -99,6 +143,7 @@ for (const v of VARIANTS) {
   for (const [k, names] of Object.entries(ROM)) {
     const a = pick(names);
     if (a !== undefined) rom.push(`${k}: ${hex(a)}`);
+    else partial.add(k);
   }
   out.push(`  ${v.key}: { ${rom.join(', ')} },`);
   const ram: Record<string, number> = {};
@@ -122,7 +167,7 @@ writeFileSync(
 export type Gen3Family = 'rs' | 'e' | 'frlg';
 
 export interface Gen3RomSymbols {
-  ${Object.keys(ROM).map((k) => `${k}${['regionMapEntries', 'kantoMapName0'].includes(k) ? '?' : ''}: number;`).join('\n  ')}
+  ${Object.keys(ROM).map((k) => `${k}${partial.has(k) ? '?' : ''}: number;`).join('\n  ')}
 }
 
 export interface Gen3RamSymbols {
