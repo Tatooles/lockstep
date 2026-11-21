@@ -1514,6 +1514,20 @@ select.outcome {
   height: 72px;
   image-rendering: pixelated;
 }
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 10px;
+}
+.facts span {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink-soft);
+}
 .enemy-team {
   display: flex;
   gap: 6px;

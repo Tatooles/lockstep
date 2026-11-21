@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { MAPS } from '../gen1/maps.ts';
-import { Gen1Data } from '../gen1/rom.ts';
-import { TYPE_COLORS, typeName } from '../gen1/types.ts';
-import type { BattleMonData, EnemyData, MonData } from '../gen1/watcher.ts';
-import { calcDamage, threatOf, type Combatant, type Threat } from '../gen1/damage.ts';
+import type { MonData } from '../run/events.ts';
 import { THUMB_H as GBA_THUMB_H, THUMB_W as GBA_THUMB_W, type GbaSession } from '../gba/session.ts';
+import type { DamageRow, WildSlot } from '../run/battle.ts';
+import { threatOf, type Threat } from '../run/damage.ts';
 import type { Dex } from '../run/dex.ts';
 import { usedAreas } from '../run/engine.ts';
 import type { Encounter, Run, TrackedMon } from '../run/types.ts';
@@ -33,13 +31,11 @@ interface Props {
 
 export function Sheet({ session, view, tab, onTab, onClose, onStartRun, onExit, docked }: Props) {
   const data: Dex | null = session.data;
-  // The battle tab and wild tables are Gen 1 only for now.
-  const gen1 = data instanceof Gen1Data ? data : null;
   const { run, snap } = view;
   const inBattle = !!snap?.inBattle && !!snap.enemy?.species;
   const dead = run ? Object.values(run.mons).filter((m) => m.status === 'dead') : [];
   const tabs: { id: TabId; label: string; count?: number; live?: boolean; hidden?: boolean }[] = [
-    { id: 'battle', label: 'Battle', live: true, hidden: !inBattle || !gen1 },
+    { id: 'battle', label: 'Battle', live: true, hidden: !inBattle || !data },
     { id: 'route', label: 'Route', hidden: !data },
     { id: 'team', label: 'Team', hidden: !data },
     { id: 'log', label: 'Log', hidden: !run },
@@ -85,7 +81,7 @@ export function Sheet({ session, view, tab, onTab, onClose, onStartRun, onExit, 
             ))}
         </div>
         <div className="sheet-body" ref={bodyRef}>
-          {active === 'battle' && gen1 && <BattleTab data={gen1} view={view} />}
+          {active === 'battle' && data && <BattleTab data={data} view={view} />}
           {active === 'route' && data && <RouteTab data={data} view={view} session={session} onStartRun={onStartRun} />}
           {active === 'team' && data && <TeamTab data={data} view={view} />}
           {active === 'log' && run && <LogTab run={run} />}
@@ -97,13 +93,13 @@ export function Sheet({ session, view, tab, onTab, onClose, onStartRun, onExit, 
   );
 }
 
-function Types({ types, data }: { types: [number, number]; data?: Dex }) {
+function Types({ types, data }: { types: [number, number]; data: Dex }) {
   const list = types[0] === types[1] ? [types[0]] : types;
   return (
     <span className="types">
       {list.map((t) => (
-        <span key={t} className="type" style={{ background: (data ? data.typeColor(t) : TYPE_COLORS[t]) ?? '#888' }}>
-          {data ? data.typeName(t) : typeName(t)}
+        <span key={t} className="type" style={{ background: data.typeColor(t) ?? '#888' }}>
+          {data.typeName(t)}
         </span>
       ))}
     </span>
@@ -118,16 +114,13 @@ function effLabel(m: number): { cls: string; txt: string } | null {
 }
 
 // ---------------- Battle ----------------
-function BattleTab({ data, view }: { data: Gen1Data; view: SessionView }) {
+function BattleTab({ data, view }: { data: Dex; view: SessionView }) {
   const { snap, run } = view;
   const enemy = snap?.enemy;
-  if (!snap || !enemy) return <p className="empty-state">No battle right now.</p>;
-  const sp = data.species.get(enemy.species);
-  const types = enemy.types;
-  const trainerTeam =
-    enemy.trainerClass && enemy.trainerNo ? data.trainerParties(enemy.trainerClass)[enemy.trainerNo - 1]?.mons ?? [] : [];
-  const area = run ? data.areaOf(snap.mapId, run.rules) : MAPS[snap.mapId]?.name;
-  const enc = run && enemy.trainerClass === 0 ? usedAreas(run).get(area ?? '') : undefined;
+  const info = snap ? data.battle(snap) : null;
+  if (!snap || !enemy || !info) return <p className="empty-state">No battle right now.</p>;
+  const area = run ? data.areaOf(snap.mapId, run.rules) : data.mapName(snap.mapId);
+  const enc = run && enemy.trainerClass === 0 ? usedAreas(run).get(area) : undefined;
   const counts = enemy.trainerClass === 0 && run?.activeEncounterId && enc?.id === run.activeEncounterId;
 
   return (
@@ -138,10 +131,10 @@ function BattleTab({ data, view }: { data: Gen1Data; view: SessionView }) {
           <h2>
             {enemy.ghost ? 'Ghost' : data.speciesName(enemy.species)} <span style={{ fontWeight: 500 }}>Lv{enemy.level}</span>
           </h2>
-          {!enemy.ghost && <Types types={types} />}
+          {!enemy.ghost && <Types types={enemy.types} data={data} />}
           <p className="sub" style={{ marginTop: 6 }}>
-            {enemy.trainerClass
-              ? `${data.trainerClasses[enemy.trainerClass]}'s Pokémon`
+            {info.owner
+              ? info.owner
               : counts
                 ? `This is your ${area} encounter. Don't knock it out.`
                 : enemy.ghost
@@ -156,22 +149,30 @@ function BattleTab({ data, view }: { data: Gen1Data; view: SessionView }) {
         </div>
       </div>
 
-      {sp && !enemy.ghost && (
-        <div className="stats" aria-label="Base stats">
-          {(['hp', 'atk', 'def', 'spd', 'spc'] as const).map((k) => (
-            <div key={k}>
-              <b>{sp.base[k]}</b>
-              {k === 'hp' ? 'HP' : k === 'atk' ? 'Atk' : k === 'def' ? 'Def' : k === 'spd' ? 'Spe' : 'Spc'}
+      {info.facts.length > 0 && (
+        <p className="facts" aria-label="Battle details">
+          {info.facts.map((f) => (
+            <span key={f}>{f}</span>
+          ))}
+        </p>
+      )}
+
+      {info.baseStats.length > 0 && (
+        <div className={`stats${info.baseStats.length > 5 ? ' six' : ''}`} aria-label="Base stats">
+          {info.baseStats.map((s) => (
+            <div key={s.label}>
+              <b>{s.value}</b>
+              {s.label}
             </div>
           ))}
         </div>
       )}
 
-      {trainerTeam.length > 0 && (
+      {info.team.length > 0 && (
         <>
           <h3>Their team</h3>
           <div className="enemy-team">
-            {trainerTeam.map((m, i) => (
+            {info.team.map((m, i) => (
               <div className="row" key={i}>
                 <Sprite data={data} species={m.species} />
                 <span className="s">
@@ -183,72 +184,65 @@ function BattleTab({ data, view }: { data: Gen1Data; view: SessionView }) {
         </>
       )}
 
-      {!enemy.ghost && (
+      {info.danger && (
         <>
-          {snap.battleMon && snap.battleMon.species > 0 && (
-            <DangerCheck
-              data={data}
-              me={snap.battleMon}
-              foe={{ ...enemy, hp: enemy.hp, maxHp: enemy.maxHp }}
-              myName={snap.party[snap.activeSlot]?.nickname ?? data.speciesName(snap.battleMon.species)}
-            />
+          {info.danger.theirs.length > 0 && (
+            <>
+              <h3>
+                Its moves against {info.danger.myName} ({info.danger.myHp}/{info.danger.myMaxHp} HP)
+              </h3>
+              <DamageRows data={data} rows={info.danger.theirs} def={{ hp: info.danger.myHp, maxHp: info.danger.myMaxHp }} defName={info.danger.myName} />
+            </>
           )}
-          {snap.party.some((m, i) => i !== snap.activeSlot && m.hp > 0) && <h3>If you switch</h3>}
-          <div className="matchups">
-            {snap.party.filter((m, i) => i !== snap.activeSlot && m.hp > 0).map((m) => (
-              <div key={m.key} className="matchup">
-                <Sprite data={data} species={m.species} />
-                <div>
-                  <div className="s" style={{ fontWeight: 700, fontSize: 13.5 }}>
-                    {m.nickname} {m.hp === 0 && <span className="outcome dead">fainted</span>}
-                  </div>
-                  <div className="mv">
-                    {m.moves
-                      .filter((x) => x > 0)
-                      .map((id, i) => {
-                        const mv = data.moves[id];
-                        const mult = mv && mv.power > 0 ? data.effectiveness(mv.type, types) : 1;
-                        const e = mv && mv.power > 0 ? effLabel(mult) : null;
-                        return (
-                          <span key={i}>
-                            {mv?.name}
-                            {e && <span className={`eff ${e.cls}`}>{e.txt}</span>}
-                          </span>
-                        );
-                      })}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
+          <h3>
+            {info.danger.myName}'s moves against {info.danger.foeName}
+          </h3>
+          <DamageRows data={data} rows={info.danger.mine} def={enemy} defName={info.danger.foeName} />
+          <p className="sub" style={{ marginTop: 8 }}>
+            {info.danger.note}
+          </p>
         </>
       )}
+      {info.bench.length > 0 && <h3>If you switch</h3>}
+      <div className="matchups">
+        {info.bench.map((m) => (
+          <div key={m.key} className="matchup">
+            <Sprite data={data} species={m.species} />
+            <div>
+              <div className="s" style={{ fontWeight: 700, fontSize: 13.5 }}>
+                {m.nickname}
+              </div>
+              <div className="mv">
+                {m.moves.map((mv, i) => {
+                  const e = mv.eff === null ? null : effLabel(mv.eff);
+                  return (
+                    <span key={i}>
+                      {mv.name}
+                      {e && <span className={`eff ${e.cls}`}>{e.txt}</span>}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
 
 const THREAT_LABEL: Record<Threat, string> = { ko: 'Can KO', 'crit-ko': 'KO on crit', heavy: 'Heavy', ok: 'Safe' };
 
-function toCombatant(x: { level: number; hp: number; maxHp: number; types: [number, number]; stats: { atk: number; def: number; spd: number; spc: number } }): Combatant {
-  return { level: x.level, hp: x.hp, maxHp: x.maxHp, types: x.types, ...x.stats };
-}
-
-function DamageRows({ data, moves, att, def, defName }: { data: Gen1Data; moves: number[]; att: Combatant; def: Combatant; defName: string }) {
-  const chart = (a: number, d: [number, number]) => data.effectiveness(a, d);
-  const rows = moves
-    .filter((id) => id > 0)
-    .map((id) => {
-      const mv = data.moves[id];
-      return { mv, r: calcDamage(mv, att, def, chart) };
-    });
+function DamageRows({ data, rows, def, defName }: { data: Dex; rows: DamageRow[]; def: { hp: number; maxHp: number }; defName: string }) {
   return (
     <ul className="rows dmg">
-      {rows.map(({ mv, r }, i) => {
+      {rows.map(({ name, type, result: r }, i) => {
         const threat = threatOf(r, def.hp);
         const pct = (n: number) => (def.maxHp ? Math.round((100 * n) / def.maxHp) : 0);
         let detail: string;
         if (r.kind === 'status') detail = 'No damage';
-        else if (r.kind === 'immune') detail = r.effectiveness === 0 ? `${defName} is immune` : 'Fails (too slow)';
+        else if (r.kind === 'varies') detail = 'Damage varies';
+        else if (r.kind === 'immune') detail = r.reason ?? (r.effectiveness === 0 ? `${defName} is immune` : 'Fails (too slow)');
         else if (r.kind === 'ohko') detail = 'One-hit KO if it lands';
         else {
           const hits = r.hits[1] > 1 ? ` ×${r.hits[0] === r.hits[1] ? r.hits[0] : `${r.hits[0]}–${r.hits[1]}`}` : '';
@@ -257,10 +251,10 @@ function DamageRows({ data, moves, att, def, defName }: { data: Gen1Data; moves:
         }
         const e = r.kind === 'damage' ? effLabel(r.effectiveness) : null;
         return (
-          <li key={i} className="dmg-row" style={{ borderLeftColor: TYPE_COLORS[mv?.type] ?? undefined }}>
+          <li key={i} className="dmg-row" style={{ borderLeftColor: data.typeColor(type) ?? undefined }}>
             <div>
               <div className="t">
-                {mv?.name} {e && <span className={`eff ${e.cls}`}>{e.txt}</span>}
+                {name} {e && <span className={`eff ${e.cls}`}>{e.txt}</span>}
               </div>
               <div className="s">{detail}</div>
             </div>
@@ -272,42 +266,12 @@ function DamageRows({ data, moves, att, def, defName }: { data: Gen1Data; moves:
   );
 }
 
-function DangerCheck({ data, me, foe, myName }: { data: Gen1Data; me: BattleMonData; foe: EnemyData; myName: string }) {
-  const mine = toCombatant(me);
-  const theirs = toCombatant(foe);
-  const foeName = data.speciesName(foe.species);
-  const known = foe.moves.filter((m) => m > 0);
-  return (
-    <>
-      {known.length > 0 && (
-        <>
-          <h3>
-            Its moves against {myName} ({me.hp}/{me.maxHp} HP)
-          </h3>
-          <DamageRows data={data} moves={known} att={theirs} def={mine} defName={myName} />
-        </>
-      )}
-      <h3>
-        {myName}'s moves against {foeName}
-      </h3>
-      <DamageRows data={data} moves={me.moves} att={mine} def={theirs} defName={foeName} />
-      <p className="sub" style={{ marginTop: 8 }}>
-        Ranges use current in-battle stats; Reflect and Light Screen aren't counted. {mine.spd > theirs.spd ? `${myName} moves first.` : mine.spd < theirs.spd ? `${foeName} moves first.` : 'Speed tie.'}
-      </p>
-    </>
-  );
-}
-
 // ---------------- Route ----------------
 function RouteTab({ data, view, session, onStartRun }: { data: Dex; view: SessionView; session: PlaySession; onStartRun: () => void }) {
   const { run, snap } = view;
   const info = routeInfo(data, run, snap);
   if (!snap) return <p className="empty-state">Load your save in the game and the route info will appear here.</p>;
-  const gen1 = data instanceof Gen1Data ? data : null;
-  const mapIds = !gen1 ? [] : run ? MAPS.filter((m) => gen1.areaOf(m.id, run.rules) === info.area).map((m) => m.id) : [snap.mapId];
-  // Current map first.
-  mapIds.sort((a, b) => (a === snap.mapId ? -1 : b === snap.mapId ? 1 : a - b));
-  const tables = gen1 ? mapIds.map((id) => ({ id, t: gen1.wild(id) })).filter((x) => x.t) : [];
+  const sections = data.wildSections(snap.mapId, run?.rules ?? null);
 
   return (
     <div>
@@ -343,35 +307,28 @@ function RouteTab({ data, view, session, onStartRun }: { data: Dex; view: Sessio
         </div>
       )}
 
-      {tables.map(({ id, t }) => (
-        <div key={id}>
-          {tables.length > 1 && <h3 style={{ color: 'var(--ink)' }}>{MAPS[id].name}</h3>}
-          {t!.grass.length > 0 && <WildGrid title={`Grass and caves (rate ${t!.grassRate})`} slots={t!.grass} data={gen1!} run={run} />}
-          {t!.water.length > 0 && <WildGrid title={`Surfing (rate ${t!.waterRate})`} slots={t!.water} data={gen1!} run={run} />}
-          {t!.superRod.length > 0 && (
-            <WildGrid
-              title="Super Rod"
-              slots={t!.superRod.map((s) => ({ ...s, chance: 1 / t!.superRod.length }))}
-              data={gen1!}
-              run={run}
-            />
-          )}
+      {sections.map((sec, i) => (
+        <div key={i}>
+          {sec.title && <h3 style={{ color: 'var(--ink)' }}>{sec.title}</h3>}
+          {sec.groups.map((g) => (
+            <WildGrid key={g.title} title={g.title} slots={g.slots} data={data} run={run} />
+          ))}
         </div>
       ))}
-      {gen1 && tables.length === 0 && <p className="empty-state">No wild Pokémon live here.</p>}
+      {sections.length === 0 && <p className="empty-state">No wild Pokémon live here.</p>}
       {run && <EncounterList data={data} run={run} session={session} />}
     </div>
   );
 }
 
-function WildGrid({ title, slots, data, run }: { title: string; slots: { level: number; species: number; chance: number }[]; data: Gen1Data; run: Run | null }) {
+function WildGrid({ title, slots, data, run }: { title: string; slots: WildSlot[]; data: Dex; run: Run | null }) {
   // Merge slots per species.
   const by = new Map<number, { species: number; chance: number; min: number; max: number }>();
   for (const s of slots) {
     const e = by.get(s.species) ?? { species: s.species, chance: 0, min: 999, max: 0 };
     e.chance += s.chance;
-    e.min = Math.min(e.min, s.level);
-    e.max = Math.max(e.max, s.level);
+    e.min = Math.min(e.min, s.min);
+    e.max = Math.max(e.max, s.max);
     by.set(s.species, e);
   }
   const list = [...by.values()].sort((a, b) => b.chance - a.chance);
@@ -381,10 +338,11 @@ function WildGrid({ title, slots, data, run }: { title: string; slots: { level: 
       <div className="wild">
         {list.map((e) => {
           const dupe = isDupe(run, data, e.species);
+          const pct = e.chance * 100;
           return (
             <div key={e.species} className={`wild-mon${dupe ? ' dupe' : ''}`}>
               {dupe && <span className="tag">Dupe</span>}
-              <span className="pct">{Math.round(e.chance * 100)}%</span>
+              <span className="pct">{pct > 0 && pct < 1 ? '<1' : Math.round(pct)}%</span>
               <Sprite data={data} species={e.species} />
               <span className="nm">{data.speciesName(e.species)}</span>
               <span className="meta">Lv {e.min === e.max ? e.min : `${e.min}–${e.max}`}</span>

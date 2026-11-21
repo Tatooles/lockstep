@@ -2,10 +2,14 @@
 // sprites) straight out of the player's own ROM, at the decompilations'
 // symbol addresses for that game and revision.
 
+import type { BattleInfo, WildSection, WildSlot } from '../run/battle.ts';
 import type { Dex, DexMove } from '../run/dex.ts';
+import type { Snapshot } from '../run/events.ts';
 import type { Milestone } from '../run/milestones.ts';
 import type { Rules, Run } from '../run/types.ts';
 import { lz77, palette, tiles4bpp } from './gfx.ts';
+import { gen3Battle } from './battle.ts';
+import type { TypeTable } from './damage.ts';
 import { RAM_SYMBOLS, ROM_SYMBOLS, type Gen3Family, type Gen3RamSymbols, type Gen3RomSymbols } from './symbols.ts';
 import { decodeText, prettyName } from './text.ts';
 
@@ -67,6 +71,38 @@ export const BATTLE_TYPE = {
 
 /** Poké Ball item ids 1–12 (Master … Premier); the Safari Ball (5) only works in the Safari Zone. */
 const SAFARI_BALL = 5;
+
+export interface Gen3Move extends DexMove {
+  id: number;
+  effect: number;
+  power: number;
+  accuracy: number;
+}
+
+/** One kind of wild encounter in an area: slots with their odds and level ranges. */
+export interface WildGroup {
+  kind: 'land' | 'water' | 'rock' | 'old' | 'good' | 'super';
+  /** Encounter rate (the chance a step or cast finds anything), or rates when maps differ. */
+  rate: [number, number];
+  slots: WildSlot[];
+}
+
+// Slot odds (src/data/wild_encounters.json, the same in every Gen 3 game).
+const LAND_CHANCES = [20, 20, 10, 10, 10, 10, 5, 5, 4, 4, 1, 1];
+const WATER_CHANCES = [60, 30, 5, 4, 1];
+const WILD_TITLES: Record<WildGroup['kind'], string> = {
+  land: 'Grass and caves',
+  water: 'Surfing',
+  rock: 'Rock Smash',
+  old: 'Old Rod',
+  good: 'Good Rod',
+  super: 'Super Rod',
+};
+const FISHING: { kind: 'old' | 'good' | 'super'; slots: number[]; chances: number[] }[] = [
+  { kind: 'old', slots: [0, 1], chances: [70, 30] },
+  { kind: 'good', slots: [2, 3, 4], chances: [60, 20, 20] },
+  { kind: 'super', slots: [5, 6, 7, 8, 9], chances: [40, 40, 15, 4, 1] },
+];
 
 export interface Species {
   index: number;
@@ -137,11 +173,16 @@ export class Gen3Data implements Dex {
   readonly sym: Gen3RomSymbols;
   readonly ram: Gen3RamSymbols;
   readonly species: Species[] = [];
-  readonly moves: (DexMove & { power: number; accuracy: number })[] = [];
+  readonly moves: Gen3Move[] = [];
+  /** gTypeEffectiveness in table order. */
+  readonly typeTable: TypeTable = { rows: [], foresight: 0 };
   readonly trainerClasses: string[] = [];
   private readonly mapsecNames = new Map<number, string>();
   private readonly mapsecOfMap = new Map<number, number>();
-  private readonly wildMaps = new Set<number>();
+  /** Maps with wild Pokémon, and their gWildMonHeaders entry. */
+  private readonly wildMaps = new Map<number, number>();
+  private readonly wildCache = new Map<string, WildGroup[]>();
+  private dexStride = -1;
   private readonly itemNames = new Map<number, string>();
   private readonly sprites = new Map<number, string>();
   private wildAreasCache: { grouping: string; areas: Set<string> } | null = null;
@@ -154,6 +195,7 @@ export class Gen3Data implements Dex {
     this.ram = RAM_SYMBOLS[game.family];
     this.readSpecies();
     this.readMoves();
+    this.readTypeTable();
     this.readTrainerClasses();
     this.readMaps();
   }
@@ -216,13 +258,30 @@ export class Gen3Data implements Dex {
     for (let i = 0; i < MOVE_COUNT; i++) {
       const p = s.moves + i * 12;
       this.moves.push({
+        id: i,
         name: prettyName(this.text(s.moveNames + i * 13, 13)),
+        effect: this.u8(p),
         power: this.u8(p + 1),
         type: this.u8(p + 2),
         accuracy: this.u8(p + 3),
         pp: this.u8(p + 4),
       });
     }
+  }
+
+  private readTypeTable(): void {
+    const t = this.sym.typeEffectiveness;
+    const rows = this.typeTable.rows;
+    for (let i = 0; i < 256; i++) {
+      const a = this.u8(t + i * 3);
+      if (a === 0xff) break;
+      if (a === 0xfe) {
+        this.typeTable.foresight = rows.length;
+        continue;
+      }
+      rows.push([a, this.u8(t + i * 3 + 1), this.u8(t + i * 3 + 2)]);
+    }
+    if (!this.typeTable.foresight) this.typeTable.foresight = rows.length;
   }
 
   private readTrainerClasses(): void {
@@ -280,7 +339,9 @@ export class Gen3Data implements Dex {
       const p = s.wildHeaders + i * 20;
       const group = this.u8(p);
       if (group === 0xff) break;
-      if (this.u32(p + 4) || this.u32(p + 8) || this.u32(p + 16)) this.wildMaps.add((group << 8) | this.u8(p + 1));
+      const id = (group << 8) | this.u8(p + 1);
+      // Emerald's Altering Cave has several headers; the first is the one in play.
+      if (!this.wildMaps.has(id) && (this.u32(p + 4) || this.u32(p + 8) || this.u32(p + 16))) this.wildMaps.set(id, p);
     }
   }
 
@@ -341,6 +402,91 @@ export class Gen3Data implements Dex {
     });
   }
 
+  /** A held item's hold effect and parameter (gItems). */
+  holdEffect(item: number): { effect: number; param: number } {
+    if (item <= 0 || item >= 400) return { effect: 0, param: 0 };
+    const p = this.sym.items + item * 44;
+    return { effect: this.u8(p + 18), param: this.u8(p + 19) };
+  }
+
+  abilityName(id: number): string {
+    return id > 0 && id < 78 ? prettyName(this.text(this.sym.abilityNames + id * 13, 13)) : '';
+  }
+
+  /** Weight in hectograms (Pokédex data), or 0 if unknown. */
+  weight(species: number): number {
+    const dex = this.species[species]?.dex ?? 0;
+    const p = this.sym.pokedexEntries;
+    if (this.dexStride < 0) {
+      // Emerald's entries are 32 bytes; R/S and FR/LG keep a second description pointer (36).
+      this.dexStride = [32, 36].find((n) => this.u16(p + n + 12) === 7 && this.u16(p + n + 14) === 69) ?? 0;
+    }
+    return dex > 0 && this.dexStride ? this.u16(p + dex * this.dexStride + 14) : 0;
+  }
+
+  /** The wild Pokémon on one map, by encounter kind. */
+  private mapWild(mapId: number): WildGroup[] {
+    const h = this.wildMaps.get(mapId);
+    if (h === undefined) return [];
+    const out: WildGroup[] = [];
+    const info = (ptr: number, n: number) => {
+      if (!this.isRomPtr(ptr)) return null;
+      const list = this.u32(ptr + 4);
+      if (!this.isRomPtr(list)) return null;
+      const mons = Array.from({ length: n }, (_, i) => {
+        const lo = this.u8(list + i * 4);
+        const hi = this.u8(list + i * 4 + 1);
+        return { species: this.u16(list + i * 4 + 2), min: Math.min(lo, hi), max: Math.max(lo, hi) };
+      });
+      return { rate: this.u8(ptr), mons };
+    };
+    const simple = (kind: 'land' | 'water' | 'rock', ptr: number, chances: number[]) => {
+      const t = info(ptr, chances.length);
+      if (t) out.push({ kind, rate: [t.rate, t.rate], slots: t.mons.map((m, i) => ({ ...m, chance: chances[i] / 100 })) });
+    };
+    simple('land', this.u32(h + 4), LAND_CHANCES);
+    simple('water', this.u32(h + 8), WATER_CHANCES);
+    simple('rock', this.u32(h + 12), WATER_CHANCES);
+    const fish = info(this.u32(h + 16), 10);
+    if (fish) {
+      for (const rod of FISHING) {
+        out.push({ kind: rod.kind, rate: [fish.rate, fish.rate], slots: rod.slots.map((s, i) => ({ ...fish.mons[s], chance: rod.chances[i] / 100 })) });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Wild Pokémon across every map of an area, merged per encounter kind. A
+   * species' chance is its average over the maps that have that kind.
+   */
+  wildArea(area: string): WildGroup[] {
+    const hit = this.wildCache.get(area);
+    if (hit) return hit;
+    const maps = [...this.wildMaps.keys()].filter((m) => this.areaOf(m) === area);
+    const byKind = new Map<WildGroup['kind'], WildGroup[]>();
+    for (const m of maps) for (const g of this.mapWild(m)) byKind.set(g.kind, [...(byKind.get(g.kind) ?? []), g]);
+    const out: WildGroup[] = [];
+    for (const kind of ['land', 'water', 'rock', 'old', 'good', 'super'] as const) {
+      const groups = byKind.get(kind);
+      if (!groups) continue;
+      const slots = new Map<number, WildSlot>();
+      for (const g of groups) {
+        for (const s of g.slots) {
+          const e = slots.get(s.species) ?? { species: s.species, min: s.min, max: s.max, chance: 0 };
+          e.min = Math.min(e.min, s.min);
+          e.max = Math.max(e.max, s.max);
+          e.chance += s.chance / groups.length;
+          slots.set(s.species, e);
+        }
+      }
+      const rates = groups.map((g) => g.rate[0]);
+      out.push({ kind, rate: [Math.min(...rates), Math.max(...rates)], slots: [...slots.values()] });
+    }
+    this.wildCache.set(area, out);
+    return out;
+  }
+
   // ---- Dex ----
   speciesName(species: number): string {
     return this.species[species]?.name || `#${species}`;
@@ -396,7 +542,7 @@ export class Gen3Data implements Dex {
 
   areaHasWild(area: string, rules: Rules): boolean {
     if (!this.wildAreasCache || this.wildAreasCache.grouping !== rules.areaGrouping) {
-      this.wildAreasCache = { grouping: rules.areaGrouping, areas: new Set([...this.wildMaps].map((m) => this.areaOf(m))) };
+      this.wildAreasCache = { grouping: rules.areaGrouping, areas: new Set([...this.wildMaps.keys()].map((m) => this.areaOf(m))) };
     }
     return this.wildAreasCache.areas.has(area);
   }
@@ -450,5 +596,16 @@ export class Gen3Data implements Dex {
     }
     this.sprites.set(species, url);
     return url || null;
+  }
+
+  wildSections(mapId: number): WildSection[] {
+    const groups = this.wildArea(this.areaOf(mapId));
+    if (!groups.length) return [];
+    const rate = ([lo, hi]: [number, number]) => (lo === hi ? `rate ${lo}` : `rate ${lo}–${hi}`);
+    return [{ title: null, groups: groups.map((g) => ({ title: `${WILD_TITLES[g.kind]} (${rate(g.rate)})`, slots: g.slots })) }];
+  }
+
+  battle(snap: Snapshot): BattleInfo | null {
+    return gen3Battle(this, snap);
   }
 }

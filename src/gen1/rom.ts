@@ -2,9 +2,12 @@
 // out of the player's own ROM using disassembly symbol offsets.
 
 import { parseHeader } from '../core/header.ts';
+import type { BattleInfo, WildSection } from '../run/battle.ts';
 import type { Dex } from '../run/dex.ts';
+import type { Snapshot } from '../run/events.ts';
 import type { Rules, Run } from '../run/types.ts';
 import { spriteUrl } from '../ui/sprites.ts';
+import { gen1Battle, gen1Wild } from './battle.ts';
 import { levelProgress } from './exp.ts';
 import { MAPS } from './maps.ts';
 import { SYMBOLS, type Gen1Symbols } from './symbols.ts';
@@ -449,5 +452,13 @@ export class Gen1Data implements Dex {
 
   spriteUrl(species: number): string | null {
     return spriteUrl(this, species);
+  }
+
+  wildSections(mapId: number, rules: Rules | null): WildSection[] {
+    return gen1Wild(this, mapId, rules);
+  }
+
+  battle(snap: Snapshot): BattleInfo | null {
+    return gen1Battle(this, snap);
   }
 }

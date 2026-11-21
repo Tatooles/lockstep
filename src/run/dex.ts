@@ -1,6 +1,8 @@
 // What the run engine and the tracker UI need to know about a game, whichever
 // generation it is. Gen1Data and Gen3Data implement it.
 
+import type { BattleInfo, WildSection } from './battle.ts';
+import type { Snapshot } from './events.ts';
 import type { Rules, Run } from './types.ts';
 
 export interface DexMove {
@@ -37,4 +39,8 @@ export interface Dex {
   scriptedBattle(battleType: number): boolean;
   /** A data URL for the species' sprite, or null (also outside the browser). */
   spriteUrl(species: number): string | null;
+  /** Wild Pokémon for the route tab: the area's maps, or only this map when there's no run. */
+  wildSections(mapId: number, rules: Rules | null): WildSection[];
+  /** The battle tab's contents, or null outside battle. */
+  battle(snap: Snapshot): BattleInfo | null;
 }
