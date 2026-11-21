@@ -1,10 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { parseHeader } from '../core/header.ts';
 import { GBA_MAX_ROM, isGbaRom, parseGbaHeader } from '../gba/header.ts';
+import { detectGen3 } from '../gen3/rom.ts';
 import { detectVersion } from '../gen1/rom.ts';
 import { db, requestPersistence, romKeyFor, type RomRecord } from '../platform/storage.ts';
 
-const VERSION_LABEL: Record<string, string> = { red: 'Red version', blue: 'Blue version', yellow: 'Yellow version' };
+const VERSION_LABEL: Record<string, string> = {
+  red: 'Red version',
+  blue: 'Blue version',
+  yellow: 'Yellow version',
+  ruby: 'Ruby version',
+  sapphire: 'Sapphire version',
+  emerald: 'Emerald version',
+  firered: 'FireRed version',
+  leafgreen: 'LeafGreen version',
+};
 
 function relTime(t: number): string {
   const d = Date.now() - t;
@@ -56,7 +66,7 @@ export function Library({ onOpen, opening, error }: { onOpen: (r: RomRecord) => 
       key: await romKeyFor(data),
       name: file.name.replace(/\.(gba|agb|bin)$/i, ''),
       title: parseGbaHeader(data).title,
-      version: null,
+      version: detectGen3(data)?.version ?? null,
       system: 'gba',
       size: data.length,
       addedAt: Date.now(),
@@ -64,7 +74,7 @@ export function Library({ onOpen, opening, error }: { onOpen: (r: RomRecord) => 
       data,
     };
     await save(rec);
-    setMsg('Added. Nuzlocke tracking covers Red, Blue and Yellow for now, but this game will play.');
+    if (!rec.version) setMsg('Added. Nuzlocke tracking needs an English Pokémon Ruby, Sapphire, Emerald, FireRed or LeafGreen ROM, but this game will still play.');
     onOpen(rec);
   };
 

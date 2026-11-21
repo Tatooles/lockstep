@@ -1,17 +1,8 @@
 // Applies game events to a Nuzlocke run. Pure logic: no DOM, no storage.
 
-import { MAPS } from '../gen1/maps.ts';
-import type { Gen1Data } from '../gen1/rom.ts';
-import { SCRIPTED_BATTLE_TYPES, hasPokeBalls, type GameEvent, type MonData, type Snapshot } from '../gen1/watcher.ts';
+import type { Dex } from './dex.ts';
+import type { GameEvent, MonData, Snapshot } from './events.ts';
 import { DEFAULT_RULES, type Encounter, type Notice, type Rules, type Run, type TrackedMon } from './types.ts';
-
-const OAKS_LAB = 40;
-
-export function areaOf(mapId: number, rules: Rules): string {
-  const m = MAPS[mapId];
-  if (!m) return `Map ${mapId}`;
-  return rules.areaGrouping === 'area' ? m.area : m.name;
-}
 
 export function newRun(opts: { name: string; romKey: string; version: string; rules?: Partial<Rules> }): Run {
   const now = Date.now();
@@ -47,17 +38,17 @@ export function usedAreas(run: Run): Map<string, Encounter> {
   return m;
 }
 
-export function ownedFamilies(run: Run, data: Gen1Data): Set<number> {
+export function ownedFamilies(run: Run, data: Dex): Set<number> {
   const s = new Set<number>();
   for (const mon of Object.values(run.mons)) {
-    const sp = data.species.get(mon.originalSpecies) ?? data.species.get(mon.species);
-    if (sp) s.add(sp.family);
+    const f = data.family(mon.originalSpecies) ?? data.family(mon.species);
+    if (f !== undefined) s.add(f);
   }
   return s;
 }
 
 export interface EngineContext {
-  data: Gen1Data;
+  data: Dex;
   snap: Snapshot;
   now?: number;
 }
@@ -108,7 +99,7 @@ export function applyEvent(run: Run, ev: GameEvent, ctx: EngineContext): Notice[
       }
       run.badges = ev.snap.badges;
       // A save that's already past the start (badges or several Pokémon) has had balls.
-      if (hasPokeBalls(ev.snap.bag) || ev.snap.badges > 0 || ev.snap.party.length + ev.snap.box.length > 1) run.hadBalls = true;
+      if (data.hasPokeBalls(ev.snap.bag) || ev.snap.badges > 0 || ev.snap.party.length + ev.snap.box.length > 1) run.hadBalls = true;
       // Adopt anything already owned that we don't know about.
       for (const m of [...ev.snap.party, ...ev.snap.box]) {
         if (!run.mons[m.key]) trackMon(run, m, 'Before tracking', ev.snap.mapId, 'baseline', now);
@@ -117,21 +108,21 @@ export function applyEvent(run: Run, ev: GameEvent, ctx: EngineContext): Notice[
     }
 
     case 'battle-start': {
-      if (ev.kind !== 'wild' || SCRIPTED_BATTLE_TYPES.has(ev.battleType)) break;
+      if (ev.kind !== 'wild' || data.scriptedBattle(ev.battleType)) break;
       run.activeEncounterId = null;
       if (ev.enemy.ghost) {
         notices.push({ tone: 'info', title: 'Unidentified ghost', body: "Doesn't count as an encounter." });
         break;
       }
-      if (!run.hadBalls && hasPokeBalls(snap.bag)) run.hadBalls = true;
+      if (!run.hadBalls && data.hasPokeBalls(snap.bag)) run.hadBalls = true;
       if (run.rules.waitForBalls && !run.hadBalls) {
         notices.push({ tone: 'info', title: 'No Poké Balls yet', body: "Doesn't count. Encounters start once you have Poké Balls.", once: true });
         break;
       }
-      const area = areaOf(ev.mapId, run.rules);
+      const area = data.areaOf(ev.mapId, run.rules);
       const used = usedAreas(run);
       if (used.has(area)) break;
-      const sp = data.species.get(ev.enemy.species);
+      const family = data.family(ev.enemy.species);
       const enc: Encounter = {
         id: eid(),
         area,
@@ -143,7 +134,7 @@ export function applyEvent(run: Run, ev: GameEvent, ctx: EngineContext): Notice[
         at: now,
         playSeconds: snap.playSeconds,
       };
-      if (run.rules.dupesClause && sp && ownedFamilies(run, data).has(sp.family)) {
+      if (run.rules.dupesClause && family !== undefined && ownedFamilies(run, data).has(family)) {
         enc.outcome = 'dupe';
         run.encounters.push(enc);
         tl('dupe', `${area}: ${name(enc.species)} is a dupe — next encounter counts`, enc.species);
@@ -189,7 +180,7 @@ export function applyEvent(run: Run, ev: GameEvent, ctx: EngineContext): Notice[
     case 'acquired': {
       const m = ev.mon;
       if (run.mons[m.key]) break;
-      const area = areaOf(ev.mapId, run.rules);
+      const area = data.areaOf(ev.mapId, run.rules);
       if (ev.duringBattle) {
         // Caught in battle.
         const enc =
@@ -225,7 +216,7 @@ export function applyEvent(run: Run, ev: GameEvent, ctx: EngineContext): Notice[
         notices.push({ tone: 'info', title: `Traded for ${name(m.species)}`, species: m.species });
         break;
       }
-      const isStarter = ev.mapId === OAKS_LAB && !Object.values(run.mons).some((x) => x.origin !== 'baseline');
+      const isStarter = data.isStarter(ev.mapId, run);
       if (isStarter) {
         trackMon(run, m, 'Starter', ev.mapId, 'starter', now);
         run.encounters.push({
@@ -258,10 +249,10 @@ export function applyEvent(run: Run, ev: GameEvent, ctx: EngineContext): Notice[
       const t = run.mons[ev.mon.key];
       if (!t || t.status === 'dead') break;
       t.status = 'dead';
-      const area = areaOf(ev.mapId, run.rules);
+      const area = data.areaOf(ev.mapId, run.rules);
       let cause = 'Fainted';
       if (ev.enemy) {
-        const who = ev.enemy.trainerClass ? `${data.trainerClasses[ev.enemy.trainerClass] ?? 'Trainer'}'s ` : 'a wild ';
+        const who = ev.enemy.trainerClass ? `${data.trainerClassName(ev.enemy.trainerClass) ?? 'Trainer'}'s ` : 'a wild ';
         cause = `${who}${name(ev.enemy.species)} (Lv${ev.enemy.level})`;
       } else if (!ev.inBattle) cause = 'Poison';
       t.death = { at: now, playSeconds: snap.playSeconds, level: ev.mon.level, mapId: ev.mapId, area, cause };
@@ -291,7 +282,7 @@ export function applyEvent(run: Run, ev: GameEvent, ctx: EngineContext): Notice[
     case 'whiteout': {
       if (run.status === 'active') {
         run.status = 'failed';
-        tl('whiteout', `Blacked out in ${areaOf(ev.mapId, run.rules)} — the run is over`);
+        tl('whiteout', `Blacked out in ${data.areaOf(ev.mapId, run.rules)} — the run is over`);
         notices.push({ tone: 'bad', title: 'Wipe!', body: 'Every party Pokémon has fainted. The run is over (you can keep playing).' });
       }
       break;
@@ -299,7 +290,7 @@ export function applyEvent(run: Run, ev: GameEvent, ctx: EngineContext): Notice[
 
     case 'items-used': {
       if (!run.rules.noBattleItems) break;
-      const list = ev.items.map((i) => `${data.items[i.id] ?? 'item'}${i.count > 1 ? ` ×${i.count}` : ''}`).join(', ');
+      const list = ev.items.map((i) => `${data.itemName(i.id) ?? 'item'}${i.count > 1 ? ` ×${i.count}` : ''}`).join(', ');
       tl('violation', `Used ${list} in a ${ev.kind} battle`);
       notices.push({ tone: 'warn', title: 'Rule check: battle items', body: `Used ${list}.` });
       break;
@@ -307,9 +298,9 @@ export function applyEvent(run: Run, ev: GameEvent, ctx: EngineContext): Notice[
 
     case 'badge': {
       run.badges |= 1 << ev.index;
-      const names = ['Boulder', 'Cascade', 'Thunder', 'Rainbow', 'Soul', 'Marsh', 'Volcano', 'Earth'];
-      tl('badge', `Earned the ${names[ev.index]} Badge`);
-      notices.push({ tone: 'good', title: `${names[ev.index]} Badge!` });
+      const badge = data.badgeName(ev.index);
+      tl('badge', `Earned the ${badge} Badge`);
+      notices.push({ tone: 'good', title: `${badge} Badge!` });
       break;
     }
 
@@ -320,9 +311,9 @@ export function applyEvent(run: Run, ev: GameEvent, ctx: EngineContext): Notice[
 }
 
 /** Keep tracked mons in sync with the live party/box (levels, evolutions, nicknames). */
-export function syncMons(run: Run, snap: Snapshot): void {
+export function syncMons(run: Run, snap: Snapshot, data: Dex): void {
   if (!snap.valid) return;
-  if (!run.hadBalls && hasPokeBalls(snap.bag)) {
+  if (!run.hadBalls && data.hasPokeBalls(snap.bag)) {
     run.hadBalls = true;
     if (run.rules.waitForBalls) {
       run.timeline.push({ at: Date.now(), playSeconds: snap.playSeconds, kind: 'note', text: 'Got Poké Balls. Encounters count from here on' });

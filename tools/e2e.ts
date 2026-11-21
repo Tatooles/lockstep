@@ -99,7 +99,8 @@ try {
     await page.waitForTimeout(400);
     await page.screenshot({ path: join(OUT, `e2e-sheet-${vp.name}.png`) });
     if (vp.name === 'portrait' && rom.endsWith('.gba')) {
-      // Save state round trip through IndexedDB.
+      // Save state round trip through IndexedDB (slots are on the Run/Settings tab).
+      if (!(await page.locator('.slot').count())) await page.getByRole('tab', { name: /^(Run|Settings)$/ }).click();
       const slot = page.locator('.slot').first();
       await slot.getByRole('button', { name: 'Save' }).click();
       await page.getByText('Saved to slot 1.').waitFor({ timeout: 5000 });

@@ -1,11 +1,15 @@
-// A Game Boy Advance play session: emulator + frame loop + audio + persistence.
-// No tracker: GBA games just play. Mirrors the shape of platform/session.ts so
-// the shared controls work with either.
+// A Game Boy Advance play session: emulator + frame loop + audio + Nuzlocke
+// tracker (Gen 3 Pokémon) + persistence. Exposes the same view and methods as
+// platform/session.ts, so the play screen works with either.
 
 import { Button, Shoulder } from '../core/constants.ts';
+import { Gen3Reader, workRam, type Mem } from '../gen3/reader.ts';
+import { detectGen3, Gen3Data } from '../gen3/rom.ts';
 import { AudioOut } from '../platform/audio.ts';
-import { SPEEDS } from '../platform/session.ts';
+import { SPEEDS, type SessionView } from '../platform/session.ts';
 import { db, type RomRecord, type StateRecord } from '../platform/storage.ts';
+import { Tracker } from '../run/tracker.ts';
+import type { Rules, Run } from '../run/types.ts';
 import { AUDIO_RATE, GBA_FPS, GBA_H, GBA_W, Key, type Gba } from './gba.ts';
 import { createGba } from './load.ts';
 import { RingResampler } from './resample.ts';
@@ -27,24 +31,23 @@ const KEY_BIT: Record<number, number> = {
 export const THUMB_W = GBA_W / 2;
 export const THUMB_H = GBA_H / 2;
 
-export interface GbaView {
-  paused: boolean;
-  speed: number;
-  fps: number;
-  muted: boolean;
-  /** Average milliseconds of emulation per frame (last second), or null before a sample. */
-  emuMs: number | null;
-  rev: number;
-}
-
 const FRAME_MS = 1000 / GBA_FPS;
+/** Read the game's state for the tracker every this many frames. */
+const TRACK_EVERY = 4;
 /** Main-thread time per animation frame we'll spend emulating. */
 const BUDGET_MS = 13;
 
 export class GbaSession {
   readonly gba: Gba;
   readonly rom: RomRecord;
+  readonly system = 'gba' as const;
+  /** Gen 3 Pokémon data, or null for other games (which just play). */
+  readonly data: Gen3Data | null;
+  readonly tracker: Tracker;
   readonly audio = new AudioOut();
+  private reader: Gen3Reader | null;
+  private mem: Mem;
+  private frameNo = 0;
   private resampler = new RingResampler();
   // What the core's sound output was last set to; null means unknown (after a
   // reset or state load, which change the core's flag), so the next tick sets it.
@@ -69,7 +72,7 @@ export class GbaSession {
   private emuMs: number | null = null;
   private clockAt = 0;
 
-  private view: GbaView;
+  private view: SessionView;
   private listeners = new Set<() => void>();
   private publishAt = 0;
   private sramTimer = 0;
@@ -83,6 +86,12 @@ export class GbaSession {
     this.rom = rom;
     this.gba = gba;
     if (sav && sav.length >= gba.save.length && gba.save.length > 0) gba.save.set(sav.subarray(0, gba.save.length));
+    const game = detectGen3(rom.data);
+    this.data = game ? new Gen3Data(rom.data, game) : null;
+    this.reader = this.data ? new Gen3Reader(this.data) : null;
+    this.mem = workRam(gba.ewram, gba.iwram);
+    // The game sets its battle flag after the intro transition, so starts need no long hold.
+    this.tracker = new Tracker(this.data, rom.key, this.data?.readMilestones() ?? [], () => this.publish(), { wildStartDelay: 2 });
     this.view = this.buildView();
     document.addEventListener('visibilitychange', this.onVis);
     window.addEventListener('pagehide', this.onHide);
@@ -102,7 +111,8 @@ export class GbaSession {
         await db.deleteState(rom.key, 'resume');
       }
     }
-    await db.putRom({ ...rom, lastPlayedAt: Date.now() });
+    await s.tracker.restore();
+    await db.putRom({ ...rom, version: s.data?.version ?? rom.version, lastPlayedAt: Date.now() });
     s.start();
     return s;
   }
@@ -113,10 +123,21 @@ export class GbaSession {
     return () => this.listeners.delete(fn);
   };
 
-  getView = (): GbaView => this.view;
+  getView = (): SessionView => this.view;
 
-  private buildView(): GbaView {
-    return { paused: this.paused, speed: this.speed, fps: this.fps, muted: this.muted, emuMs: this.emuMs, rev: this.rev };
+  private buildView(): SessionView {
+    return {
+      ...this.tracker.view(),
+      paused: this.paused,
+      speed: this.speed,
+      fps: this.fps,
+      muted: this.muted,
+      version: this.data?.version ?? null,
+      grind: null,
+      grindEnd: null,
+      emuMs: this.emuMs,
+      rev: this.rev,
+    };
   }
 
   private publish(): void {
@@ -191,6 +212,7 @@ export class GbaSession {
       gba.runFrame();
       this.acc -= FRAME_MS;
       frames++;
+      if (++this.frameNo % TRACK_EVERY === 0) this.track();
       if (performance.now() - t0 > BUDGET_MS) break;
     }
     // Falling behind (slow device, or a budget overrun): drop the debt rather than spiral.
@@ -211,8 +233,44 @@ export class GbaSession {
     }
     if (now - this.publishAt > 250) {
       this.publishAt = now;
+      this.tracker.expireToasts(now);
       this.publish();
     }
+  }
+
+  // ---- tracker ----
+  private track(): void {
+    if (!this.reader) return;
+    const snap = this.reader.read(this.mem);
+    if (!snap.valid) return;
+    const changed = this.tracker.observe(snap);
+    if (this.tracker.run?.rules.forceSetMode) this.reader.setBattleStyle(this.mem, (a, v) => this.gba.x.poke8(a, v));
+    if (changed) this.publish();
+  }
+
+  dismissToast(id: number): void {
+    this.tracker.dismissToast(id);
+    this.publish();
+  }
+
+  startRun(name: string, rules: Partial<Rules>): Promise<Run> {
+    return this.tracker.startRun(name, rules);
+  }
+
+  endRun(): Promise<void> {
+    return this.tracker.endRun();
+  }
+
+  updateRun(mut: (run: Run) => void): void {
+    this.tracker.updateRun(mut);
+  }
+
+  // Game Boy only for now (palettes) or not yet on GBA (Endless Repel, auto-grind).
+  setPalette(_id: string): void {}
+  setRepel(_on: boolean): void {}
+  stopGrind(): void {}
+  dismissGrindEnd(): void {
+    this.setPaused(false);
   }
 
   private flushAudio(): void {
@@ -276,6 +334,7 @@ export class GbaSession {
   reset(): void {
     this.gba.reset();
     this.gba.setTime(new Date());
+    this.tracker.resync();
     this.clearAudio();
     this.present();
   }
@@ -290,7 +349,12 @@ export class GbaSession {
     return new Uint8Array(out.buffer);
   }
 
+  canUseStates(): boolean {
+    return !this.tracker.run?.rules.noSaveStates;
+  }
+
   async saveSlot(slot: string): Promise<void> {
+    if (!this.canUseStates()) throw new Error('Save states are disabled for this run');
     await db.putState({
       key: `${this.rom.key}:${slot}`,
       romKey: this.rom.key,
@@ -298,15 +362,18 @@ export class GbaSession {
       savedAt: Date.now(),
       state: this.gba.saveState(),
       thumb: this.thumb(),
+      runId: this.tracker.run?.id ?? null,
     });
   }
 
   /** Throws with a readable message if the slot holds a state this core can't load. */
   async loadSlot(slot: string): Promise<boolean> {
+    if (!this.canUseStates()) throw new Error('Save states are disabled for this run');
     const rec = await db.getState<Uint8Array>(this.rom.key, slot);
     if (!rec) return false;
     this.gba.loadState(rec.state);
     this.gba.setTime(new Date());
+    this.tracker.resync();
     this.clearAudio();
     this.present();
     return true;
@@ -331,11 +398,12 @@ export class GbaSession {
       slot: 'resume',
       savedAt: Date.now(),
       state: this.gba.saveState(),
+      runId: this.tracker.run?.id ?? null,
     });
   }
 
   async flush(): Promise<void> {
-    await Promise.all([this.persistSave(), this.saveResume()]);
+    await Promise.all([this.persistSave(), this.saveResume(), this.tracker.save()]);
   }
 
   private handleHide(): void {
@@ -376,6 +444,7 @@ export class GbaSession {
     cancelAnimationFrame(this.raf);
     clearInterval(this.sramTimer);
     clearInterval(this.resumeTimer);
+    this.tracker.dispose();
     document.removeEventListener('visibilitychange', this.onVis);
     window.removeEventListener('pagehide', this.onHide);
     await this.flush();

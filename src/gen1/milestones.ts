@@ -1,14 +1,9 @@
 // Level-cap milestones (gym leaders, Elite Four, champion), read from the ROM's trainer data.
 
+import type { Milestone } from '../run/milestones.ts';
 import type { Gen1Data } from './rom.ts';
 
-export interface Milestone {
-  id: string;
-  name: string;
-  badgeBit: number | null; // badge earned by beating them (null for E4/champ)
-  ace: number; // highest level on their team
-  team: { level: number; species: number }[];
-}
+export { nextMilestone, type Milestone } from '../run/milestones.ts';
 
 const DEFS: { id: string; name: string; cls: number; party: number; badgeBit: number | null }[] = [
   { id: 'brock', name: 'Brock', cls: 0x22, party: 1, badgeBit: 0 },
@@ -38,13 +33,4 @@ export function readMilestones(data: Gen1Data): Milestone[] {
       ace: team.reduce((m, t) => Math.max(m, t.level), 0),
     };
   });
-}
-
-/** Next milestone given obtained badges (gyms in standard order, then the League). */
-export function nextMilestone(milestones: Milestone[], badges: number): Milestone | null {
-  for (const m of milestones) {
-    if (m.badgeBit === null) return m; // all gyms done -> first E4 member
-    if (!(badges & (1 << m.badgeBit))) return m;
-  }
-  return null;
 }

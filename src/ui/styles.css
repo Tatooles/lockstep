@@ -1233,6 +1233,9 @@ select.outcome {
   font-size: 12px;
   text-align: center;
 }
+.stats.six {
+  grid-template-columns: repeat(6, 1fr);
+}
 .stats div {
   background: var(--panel);
   border-radius: var(--radius-s);
@@ -1757,15 +1760,19 @@ select.outcome {
 }
 
 /* ---------- Game Boy Advance ---------- */
-.play.gba {
+/* Games without tracking have no team strip. */
+.play.no-team {
   grid-template-rows: auto auto 1fr;
 }
-.play.gba .lower {
+.play.no-team .lower {
   grid-row: 3;
 }
 .play.gba .screen-wrap {
-  width: min(100%, calc((100dvh - 400px) * 3 / 2), 720px);
+  width: min(100%, calc((100dvh - 470px) * 3 / 2), 720px);
   border-radius: 14px;
+}
+.play.gba.no-team .screen-wrap {
+  width: min(100%, calc((100dvh - 400px) * 3 / 2), 720px);
 }
 .play.gba .screen {
   aspect-ratio: 240 / 160;
@@ -1817,10 +1824,13 @@ select.outcome {
   }
 }
 @media (min-width: 1000px) and (min-height: 600px) and (hover: hover) {
-  .play.gba {
+  .play.no-team {
     grid-template-rows: auto auto 1fr;
   }
   .play.gba .screen-wrap {
+    width: min(100%, calc((100dvh - 320px) * 3 / 2));
+  }
+  .play.gba.no-team .screen-wrap {
     width: min(100%, calc((100dvh - 250px) * 3 / 2));
   }
   .shoulders {

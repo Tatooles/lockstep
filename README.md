@@ -32,9 +32,12 @@ takes over. The bot reads the game's call stack to know which menu is up, so it 
 
 Tracking works with English **Pokémon Red, Blue and Yellow**. Any other DMG game still plays.
 
-**Game Boy Advance.** Lockstep also plays `.gba` games on its own GBA core, built for Gen 3 Pokémon (Ruby, Sapphire,
-Emerald, FireRed, LeafGreen): sound, L and R, fast-forward, save states, `.sav` import/export and the cartridge
-clock from your device's time. There's no Nuzlocke tracking for GBA games yet; they just play.
+**Game Boy Advance.** Lockstep also plays `.gba` games on its own GBA core: sound, L and R, fast-forward, save states,
+`.sav` import/export and the cartridge clock from your device's time. English **Pokémon Ruby, Sapphire, Emerald,
+FireRed and LeafGreen** (every revision) get the same Nuzlocke tracking as Gen 1: first encounters per area, catches,
+gifts, trades, dupes, deaths and wipes, level caps from the gym leaders' and Elite Four's teams, rule checks (items in
+battle, Set battle style, save states), and the team, log and graves tabs. The battle tab, wild encounter tables, auto-grind
+and Endless Repel are Gen 1 only for now. Other GBA games just play.
 
 **Bring your own ROM.** Nothing copyrighted ships with the app. Species names, sprites, moves and encounter tables
 are decoded at runtime from the ROM you load, which stays in your browser (IndexedDB) and is never uploaded.
@@ -48,13 +51,15 @@ are decoded at runtime from the ROM you load, which stays in your browser (Index
 | `wasm-gba/` | The Game Boy Advance core, in Rust: ARM7TDMI, PPU, sound, DMA/timers, Flash/SRAM saves, RTC, HLE BIOS. See its README. |
 | `src/gba/` | The built `lockstep_gba.wasm`, its wrapper, loader, play session and audio resampler. |
 | `src/gen1/` | Gen 1 knowledge: RAM reader and event differ, ROM data reader, pic decompressor, map names. |
-| `src/run/` | Nuzlocke rules engine. Pure functions from game events to run state, unit-tested. |
+| `src/gen3/` | Gen 3 knowledge: RAM reader (decrypts party and PC Pokémon), ROM data reader (species, moves, trainers, map names, sprites). |
+| `src/run/` | Nuzlocke rules engine (pure functions from game events to run state, unit-tested), the snapshot differ, the `Dex` interface each generation implements, and the tracker both sessions share. |
 | `src/bot/` | Auto-grind: reads which screen the game is on from its call stack, picks battle moves, drives the buttons. |
 | `src/platform/` | Frame loop, audio worklet output, IndexedDB storage. |
 | `src/ui/` | React UI. |
 
 RAM and ROM addresses come from the [pret](https://github.com/pret) disassemblies' symbol files
-(`tools/gen-gen1-data.ts` generates `src/gen1/symbols.ts` and `src/gen1/maps.ts`).
+(`tools/gen-gen1-data.ts` generates `src/gen1/symbols.ts` and `src/gen1/maps.ts`; `tools/gen-gen3-symbols.ts` generates
+`src/gen3/symbols.ts`).
 
 ## Develop
 
@@ -80,6 +85,7 @@ node tools/bench.ts [rom]              # frames/sec, headless
 node tools/pic-roundtrip.ts            # pic decoder vs pret's pkmncompress (needs vendor-data/pictest)
 node tools/e2e.ts [rom]                # phone-viewport browser smoke test
 node tools/play.ts <rom> -e "..."      # scripted headless play to test tracking and auto-grind (commands in its header)
+node tools/gen3-track.ts <rom> "..."   # the same for Gen 3: scripted input with the tracker printing events
 ```
 
 Current results: blargg `cpu_instrs`, `instr_timing`, `mem_timing`, `mem_timing-2`, `halt_bug` and dmg-acid2 pass;

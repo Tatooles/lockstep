@@ -90,7 +90,7 @@ function step(n = 1): void {
         console.log(`[f${frame}] event ${ev.type} ${desc}`);
         for (const n2 of notices) console.log(`        notice(${n2.tone}): ${n2.title}${n2.body ? ' — ' + n2.body : ''}`);
       }
-      syncMons(run, s);
+      syncMons(run, s, data);
     }
   }
 }

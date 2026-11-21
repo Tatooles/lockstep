@@ -4,22 +4,19 @@ import { Grinder, type GrindEnd, type GrindProgress } from '../bot/grinder.ts';
 import { FRAME_RATE, SCREEN_H, SCREEN_W } from '../core/constants.ts';
 import type { GameBoy } from '../core/gameboy.ts';
 import { createGameBoy } from '../core/load.ts';
-import { nextMilestone, readMilestones, type Milestone } from '../gen1/milestones.ts';
+import { readMilestones } from '../gen1/milestones.ts';
 import { detectVersion, Gen1Data } from '../gen1/rom.ts';
 import { SYMBOLS } from '../gen1/symbols.ts';
-import { EventDiffer, Gen1Reader, type Ram, type Snapshot } from '../gen1/watcher.ts';
-import { applyEvent, liveWarnings, newRun, syncMons } from '../run/engine.ts';
-import { DEFAULT_RULES, type Notice, type Rules, type Run } from '../run/types.ts';
+import { Gen1Reader, type Ram, type Snapshot } from '../gen1/watcher.ts';
+import { Tracker, type Milestone, type ToastItem } from '../run/tracker.ts';
+import type { Rules, Run } from '../run/types.ts';
 import { AudioOut } from './audio.ts';
 import { packPalette, paletteById } from './palettes.ts';
 import { db, type RomRecord } from './storage.ts';
 
 export const SPEEDS = [1, 2, 4, 8] as const;
 
-export interface ToastItem extends Notice {
-  id: number;
-  at: number;
-}
+export type { ToastItem };
 
 export interface SessionView {
   snap: Snapshot | null;
@@ -55,12 +52,10 @@ export class Session {
   readonly gb: GameBoy;
   readonly rom: RomRecord;
   readonly data: Gen1Data | null;
-  readonly milestones: Milestone[];
+  readonly system = 'gb' as const;
+  readonly tracker: Tracker;
   readonly audio = new AudioOut();
   private reader: Gen1Reader | null;
-  private differ = new EventDiffer();
-  private run: Run | null = null;
-  private snap: Snapshot | null = null;
   private ram: Ram;
 
   private canvas: CanvasRenderingContext2D | null = null;
@@ -90,14 +85,9 @@ export class Session {
   private emuFrames = 0;
   private emuMs: number | null = null;
 
-  private toasts: ToastItem[] = [];
-  private toastId = 0;
-  private shownOnce = new Set<string>();
   private view: SessionView;
   private listeners = new Set<() => void>();
   private publishAt = 0;
-  private runDirty = false;
-  private runSaveTimer = 0;
   private sramTimer = 0;
   private resumeTimer = 0;
   private rev = 0;
@@ -111,7 +101,11 @@ export class Session {
     if (sram && sram.length === this.gb.cart.ram.length) this.gb.cart.ram.set(sram);
     const version = detectVersion(rom.data);
     this.data = version ? new Gen1Data(rom.data, version) : null;
-    this.milestones = this.data ? readMilestones(this.data) : [];
+    // While the bot plays, the grind chip says what's going on; info notices
+    // (no balls yet, dupes, ghosts) would only pile up at turbo speed.
+    this.tracker = new Tracker(this.data, rom.key, this.data ? readMilestones(this.data) : [], () => this.publish(), {
+      mute: (n) => !!this.grinder && n.tone === 'info',
+    });
     this.reader = version ? new Gen1Reader(SYMBOLS[version]) : null;
     const wram = this.gb.bus.wram;
     const bus = this.gb.bus;
@@ -133,11 +127,7 @@ export class Session {
         console.warn('Could not restore resume state', err);
       }
     }
-    const activeRunId = await db.getKv<string>(`activeRun:${rom.key}`);
-    if (activeRunId) {
-      const run = await db.getRun(activeRunId);
-      if (run) s.attachRun(run);
-    }
+    await s.tracker.restore();
     await db.putRom({ ...rom, lastPlayedAt: Date.now() });
     s.start();
     return s;
@@ -160,15 +150,10 @@ export class Session {
   getView = (): SessionView => this.view;
 
   private buildView(): SessionView {
-    const cap = this.snap ? nextMilestone(this.milestones, this.snap.badges) : null;
     return {
-      snap: this.snap,
-      run: this.run,
+      ...this.tracker.view(),
       paused: this.paused,
       speed: this.speed,
-      toasts: this.toasts,
-      warnings: this.run && this.snap ? liveWarnings(this.run, this.snap, cap?.ace ?? null) : [],
-      milestone: cap,
       fps: this.fps,
       muted: this.muted,
       version: this.data?.version ?? null,
@@ -280,7 +265,7 @@ export class Session {
     }
     if (now - this.publishAt > 250) {
       this.publishAt = now;
-      this.expireToasts(now);
+      this.tracker.expireToasts(now);
       this.publish();
     }
   }
@@ -335,8 +320,9 @@ export class Session {
     const enemy = snap.enemy;
     if (!data || !enemy) return null;
     const name = data.speciesName(enemy.species);
-    if (this.run) {
-      const enc = this.run.encounters.find((e) => e.id === this.run?.activeEncounterId);
+    const run = this.tracker.run;
+    if (run) {
+      const enc = run.encounters.find((e) => e.id === run.activeEncounterId);
       return enc?.outcome === 'pending' ? `Wild ${name}: your first encounter on ${enc.area}. It's all yours.` : null;
     }
     const dex = data.species.get(enemy.species)?.dex ?? 0;
@@ -376,7 +362,7 @@ export class Session {
     }
     if (now - this.publishAt > 250) {
       this.publishAt = now;
-      this.expireToasts(now);
+      this.tracker.expireToasts(now);
       this.publish();
     }
   }
@@ -428,23 +414,13 @@ export class Session {
     if (!this.reader) return;
     const snap = this.reader.read(this.ram);
     if (!snap.valid) return;
-    this.snap = snap;
     this.applyRepel();
-    const events = this.differ.update(snap);
-    if (this.run && this.data) {
-      for (const ev of events) {
-        const notices = applyEvent(this.run, ev, { data: this.data, snap });
-        for (const n of notices) this.toast(n);
-        this.runDirty = true;
-      }
-      syncMons(this.run, snap);
-      if (this.run.rules.forceSetMode) {
-        const a = SYMBOLS[this.data.version].wOptions - 0xc000;
-        this.gb.bus.wram[a] |= 0x40;
-      }
-      if (events.length) this.scheduleRunSave();
+    const changed = this.tracker.observe(snap);
+    if (this.data && this.tracker.run?.rules.forceSetMode) {
+      const a = SYMBOLS[this.data.version].wOptions - 0xc000;
+      this.gb.bus.wram[a] |= 0x40;
     }
-    if (events.length) this.publish();
+    if (changed) this.publish();
   }
 
   /**
@@ -464,78 +440,23 @@ export class Session {
     }
   }
 
-  private toast(n: Notice): void {
-    // While the bot plays, the grind chip says what's going on; info notices
-    // (no balls yet, dupes, ghosts) would only pile up at turbo speed.
-    if (this.grinder && n.tone === 'info') return;
-    if (n.once) {
-      if (this.shownOnce.has(n.title)) return;
-      this.shownOnce.add(n.title);
-    }
-    const now = performance.now();
-    // A repeat of a toast still on screen replaces it rather than stacking.
-    const rest = this.toasts.filter((t) => t.title !== n.title || t.body !== n.body);
-    this.toasts = [...rest, { ...n, id: ++this.toastId, at: now }].slice(-3);
-    if ((n.tone === 'bad' || n.tone === 'good') && 'vibrate' in navigator) navigator.vibrate?.(n.tone === 'bad' ? [40, 60, 40] : 20);
-  }
-
   dismissToast(id: number): void {
-    this.toasts = this.toasts.filter((t) => t.id !== id);
+    this.tracker.dismissToast(id);
     this.publish();
-  }
-
-  private expireToasts(now: number): void {
-    const keep = this.toasts.filter((t) => now - t.at < (t.tone === 'bad' ? 7000 : 4500));
-    if (keep.length !== this.toasts.length) this.toasts = keep;
   }
 
   // ---- runs ----
-  private attachRun(run: Run): void {
-    run.rules = { ...DEFAULT_RULES, ...run.rules };
-    this.run = run;
-    this.differ = new EventDiffer();
-    this.differ.seedKnown(Object.keys(run.mons));
+  startRun(name: string, rules: Partial<Rules>): Promise<Run> {
+    return this.tracker.startRun(name, rules);
   }
 
-  async startRun(name: string, rules: Partial<Rules>): Promise<Run> {
-    const run = newRun({ name, romKey: this.rom.key, version: this.data?.version ?? 'unknown', rules });
-    this.attachRun(run);
-    await db.putRun(run);
-    await db.putKv(`activeRun:${this.rom.key}`, run.id);
-    this.publish();
-    return run;
-  }
-
-  async endRun(): Promise<void> {
-    if (!this.run) return;
-    await db.putRun(this.run);
-    await db.putKv(`activeRun:${this.rom.key}`, null);
-    this.run = null;
-    this.differ = new EventDiffer();
-    this.publish();
+  endRun(): Promise<void> {
+    return this.tracker.endRun();
   }
 
   /** Apply a manual change to the run (from the UI) and persist it. */
   updateRun(mut: (run: Run) => void): void {
-    if (!this.run) return;
-    mut(this.run);
-    this.run.updatedAt = Date.now();
-    this.scheduleRunSave();
-    this.publish();
-  }
-
-  private scheduleRunSave(): void {
-    if (this.runSaveTimer) return;
-    this.runSaveTimer = window.setTimeout(() => {
-      this.runSaveTimer = 0;
-      void this.saveRun();
-    }, 800);
-  }
-
-  private async saveRun(): Promise<void> {
-    if (!this.run) return;
-    this.runDirty = false;
-    await db.putRun(this.run);
+    this.tracker.updateRun(mut);
   }
 
   // ---- input & controls ----
@@ -582,12 +503,12 @@ export class Session {
     this.stopGrind();
     // Soft reset: power cycle, keeping battery RAM.
     this.gb.reset();
-    this.differ.reset();
+    this.tracker.resync();
   }
 
   // ---- save states ----
   canUseStates(): boolean {
-    return !this.run?.rules.noSaveStates;
+    return !this.tracker.run?.rules.noSaveStates;
   }
 
   async saveSlot(slot: string): Promise<void> {
@@ -599,7 +520,7 @@ export class Session {
       savedAt: Date.now(),
       state: this.gb.saveState(),
       thumb: this.gb.ppu.frame.slice(),
-      runId: this.run?.id ?? null,
+      runId: this.tracker.run?.id ?? null,
     });
   }
 
@@ -609,8 +530,7 @@ export class Session {
     if (!rec) return false;
     this.stopGrind();
     this.gb.loadState(rec.state);
-    this.differ.reset();
-    this.differ.seedKnown(Object.keys(this.run?.mons ?? {}));
+    this.tracker.resync();
     this.audio.clear();
     this.present();
     return true;
@@ -631,12 +551,12 @@ export class Session {
       slot: 'resume',
       savedAt: Date.now(),
       state: this.gb.saveState(),
-      runId: this.run?.id ?? null,
+      runId: this.tracker.run?.id ?? null,
     });
   }
 
   async flush(): Promise<void> {
-    await Promise.all([this.persistSram(), this.saveResume(), this.run ? db.putRun(this.run) : Promise.resolve()]);
+    await Promise.all([this.persistSram(), this.saveResume(), this.tracker.save()]);
   }
 
   private handleHide(): void {
@@ -676,7 +596,7 @@ export class Session {
     cancelAnimationFrame(this.raf);
     clearInterval(this.sramTimer);
     clearInterval(this.resumeTimer);
-    clearTimeout(this.runSaveTimer);
+    this.tracker.dispose();
     document.removeEventListener('visibilitychange', this.onVis);
     window.removeEventListener('pagehide', this.onHide);
     await this.flush();
@@ -684,6 +604,6 @@ export class Session {
   }
 
   get dirty(): boolean {
-    return this.runDirty;
+    return this.tracker.dirty;
   }
 }

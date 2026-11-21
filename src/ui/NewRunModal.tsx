@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Session } from '../platform/session.ts';
 import { db } from '../platform/storage.ts';
 import { DEFAULT_RULES, type Rules } from '../run/types.ts';
+import { versionLabel } from './derive.ts';
+import type { PlaySession } from './Sheet.tsx';
 
-export function NewRunModal({ session, onClose }: { session: Session; onClose: () => void }) {
+export function NewRunModal({ session, onClose }: { session: PlaySession; onClose: () => void }) {
   const version = session.data?.version ?? 'game';
-  const label = version[0].toUpperCase() + version.slice(1);
+  const label = versionLabel(version);
   const [name, setName] = useState(`${label} Nuzlocke`);
   const [rules, setRules] = useState<Rules>({ ...DEFAULT_RULES });
   const [busy, setBusy] = useState(false);
