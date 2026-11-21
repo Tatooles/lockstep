@@ -46,7 +46,9 @@ export class GbaSession {
   readonly rom: RomRecord;
   readonly audio = new AudioOut();
   private resampler = new RingResampler();
-  private audioWasOn = false;
+  // What the core's sound output was last set to; null means unknown (after a
+  // reset or state load, which change the core's flag), so the next tick sets it.
+  private audioWasOn: boolean | null = null;
 
   private canvas: CanvasRenderingContext2D | null = null;
   private image: ImageData | null = null;
@@ -232,6 +234,7 @@ export class GbaSession {
     this.audio.clear();
     this.gba.discardAudio();
     this.resampler.reset();
+    this.audioWasOn = null;
   }
 
   // ---- input & controls ----
