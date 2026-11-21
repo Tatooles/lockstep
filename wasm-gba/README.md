@@ -109,11 +109,12 @@ Sapphire in Node 26: 28.8× full, 55.2× CPU only, GBA CPU 36% busy.
 Phone testing gotcha: Safari only JIT-compiles in secure contexts. Over plain
 `http://<LAN IP>` the iPhone interpreted everything and ran at ~0.7×; use
 `tools/vite-https.config.ts` (HTTPS with a self-signed certificate) or a
-deployed HTTPS build. `jit-check.html` tells the two apart in a second.
+deployed HTTPS build.
 
 Emerald and FireRed busy-wait for VBlank (Emerald at 0x080008C6, FireRed at
 0x080008AA). Sapphire doesn't: its main loop calls VBlankIntrWait (SWI 5 at
-0x081E07B6), so the CPU halts and idle-loop detection isn't involved. Idle-loop detection takes the GBA CPU from 100% to ~40% busy
-and makes the core ~1.7× faster; without it, native speed is ~28–30×.
+0x081E07B6), so the CPU halts and idle-loop detection isn't involved.
+
+Idle-loop detection takes the GBA CPU from 100% to ~40% busy and makes the core ~1.7× faster; without it, native speed is ~28–30×.
 Drawing is ~45–49% of frame time and can be skipped on fast-forward frames
 that aren't shown.

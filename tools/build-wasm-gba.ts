@@ -1,4 +1,4 @@
-// Builds wasm-gba/ (the GBA core spike) and copies the module to src/gba/lockstep_gba.wasm.
+// Builds wasm-gba/ (the GBA core) and copies the module to src/gba/lockstep_gba.wasm.
 //   node tools/build-wasm-gba.ts        (needs rustup with the wasm32-unknown-unknown target)
 
 import { execFileSync } from 'node:child_process';

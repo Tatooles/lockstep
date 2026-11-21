@@ -1,5 +1,4 @@
-// Runs a bench page (bench-gba.html, or the mGBA reference page from
-// tools/serve-mgba-bench.ts) in Chrome (Playwright's "Chrome for Testing" if
+// Runs bench-gba.html in Chrome (Playwright's "Chrome for Testing" if
 // cached, or CHROME=/path/to/binary) and prints the result.
 //   node tools/bench-gba-chromium.ts [url]
 // Default url: http://localhost:5173/bench-gba.html?auto=1&label=chrome
@@ -24,7 +23,7 @@ const browser = await chromium.launch({ headless: false, executablePath: findChr
 const page = await browser.newPage();
 page.on('pageerror', (e) => console.error('page error:', e.message));
 await page.goto(url);
-// Both pages print the user agent last.
+// The page prints the user agent last.
 await page.waitForFunction(() => document.getElementById('out')?.textContent?.includes('UA:'), null, {
   timeout: 15 * 60_000,
 });

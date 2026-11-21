@@ -2,7 +2,7 @@ import react from '@vitejs/plugin-react';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { defineConfig, type Plugin } from 'vite';
 
-// GBA core spike: bench-gba.html posts its results here so runs on other
+// bench-gba.html posts its results here so runs on other
 // devices (an iPhone on the LAN) land in tools/out/bench-results.jsonl.
 const benchResults: Plugin = {
   name: 'gba-bench-results',
