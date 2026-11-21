@@ -29,6 +29,7 @@ add(10, { power: 150, effect: 170 }); // Focus Punch
 add(11, { power: 100, type: TYPE.GROUND }); // Earthquake
 add(12, { power: 150, effect: 80, accuracy: 90 }); // Hyper Beam
 add(13, { power: 90 }); // Strength
+add(14, { power: 120, effect: 151 }); // Solar Beam
 
 const mon = (p: Partial<Battler> = {}): Battler => ({
   species: 1, level: 10, hp: 30, maxHp: 30, types: [TYPE.NORMAL, TYPE.NORMAL],
@@ -102,6 +103,17 @@ describe('Gen 3 auto-grind battle policy', () => {
     expect(chooseAction3(d)).toMatchObject({ kind: 'fight', slot: 0, why: 'finish it first' });
     // Evasion up: the knockout is no longer sure.
     expect(chooseAction3({ ...d, foe: { ...d.foe, stages: [0, 0, 0, 0, 0, 0, 0, 1] } })).toMatchObject({ kind: 'run' });
+  });
+
+  it('never counts a charging turn as finishing the foe first', () => {
+    const d = duel({
+      me: mon({ player: true, hp: 4, def: 5, spe: 50 }),
+      foe: mon({ hp: 3, atk: 30 }),
+      myMoves: [14, 0, 0, 0],
+      myPp: [5, 0, 0, 0],
+      foeMoves: [1, 0, 0, 0],
+    });
+    expect(chooseAction3(d)).toMatchObject({ kind: 'run', why: 'too dangerous' });
   });
 
   it('counts priority both ways', () => {

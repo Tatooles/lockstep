@@ -436,10 +436,10 @@ export class Grinder3 {
   // ---- battle ----
 
   private battleMenu(): GrindEnd | null {
-    // A new turn: anything the game refused last turn may work again.
-    this.pickedSlot = -1;
-    this.refused.clear();
     if (!this.decision || this.committed) {
+      // A new turn: anything the game refused last turn may work again.
+      this.pickedSlot = -1;
+      this.refused.clear();
       this.committed = false;
       const snap = this.reader.read(this.mem);
       if (!snap.valid || !snap.enemy || !snap.battleMon) return null;
@@ -489,6 +489,8 @@ export class Grinder3 {
       this.pickedSlot = -1;
       const snap = this.reader.read(this.mem);
       if (snap.valid && snap.enemy && snap.battleMon) this.decision = this.decide(snap);
+      // Nothing else works: back out and run this same turn, keeping what was refused.
+      if (this.decision?.kind === 'run') this.committed = false;
     }
     const d = this.decision;
     if (!d || d.kind !== 'fight') {

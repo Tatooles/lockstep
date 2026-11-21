@@ -87,6 +87,8 @@ export class GbaSession {
   private emuTime = 0;
   private emuFrames = 0;
   private emuMs: number | null = null;
+  /** The last callback ran out of budget before its drawn frame. */
+  private undrawn = false;
   /** Smoothed time between animation frames. */
   private vsyncMs = 0;
   private clockAt = 0;
@@ -254,14 +256,24 @@ export class GbaSession {
     const t0 = performance.now();
     gba.setKeys(this.keys);
     let frames = 0;
+    let cost = this.emuMs ?? 0;
     while (frames < n) {
-      // Only the frame we show needs drawing.
-      gba.render = frames === n - 1;
+      // Only the frame we show needs drawing. Draw early when another frame
+      // won't fit the budget, or when the last callback stopped before drawing,
+      // so a slow device never leaves the screen frozen.
+      const start = performance.now();
+      const draw = frames === n - 1 || this.undrawn || start - t0 + cost > budget;
+      gba.render = draw;
       gba.runFrame();
+      if (draw) this.undrawn = false;
+      cost = performance.now() - start;
       if (!locked) this.acc -= FRAME_MS;
       frames++;
       if (++this.frameNo % TRACK_EVERY === 0) this.track();
-      if (performance.now() - t0 > budget) break;
+      if (performance.now() - t0 > budget) {
+        if (!draw) this.undrawn = true;
+        break;
+      }
     }
     // Falling behind (slow device, or a budget overrun): drop the debt rather than spiral.
     if (!locked && frames < due) this.acc = Math.min(this.acc, FRAME_MS);

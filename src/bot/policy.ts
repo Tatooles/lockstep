@@ -45,7 +45,8 @@ export function rankMoves(options: MoveOption[], myHp: number, foeHp: number): R
     if (r.kind === 'status' || r.kind === 'immune' || r.kind === 'varies' || r.kind === 'ohko') continue;
     const hitsAvg = (r.hits[0] + r.hits[1]) / 2;
     let expected = ((r.min + r.max) / 2) * hitsAvg * o.hitChance;
-    const sureKo = r.min * r.hits[0] >= foeHp;
+    // A charging turn deals nothing now, so it can't be a sure knockout this turn.
+    const sureKo = o.tempo !== 'charge' && r.min * r.hits[0] >= foeHp;
     if (o.tempo === 'charge') expected /= 2;
     if (o.tempo === 'recharge' && !sureKo) expected /= 2;
     // Don't trade half our HP in recoil for a hit.
