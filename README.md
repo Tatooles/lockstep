@@ -32,6 +32,10 @@ takes over. The bot reads the game's call stack to know which menu is up, so it 
 
 Tracking works with English **Pokémon Red, Blue and Yellow**. Any other DMG game still plays.
 
+**Game Boy Advance.** Lockstep also plays `.gba` games on its own GBA core, built for Gen 3 Pokémon (Ruby, Sapphire,
+Emerald, FireRed, LeafGreen): sound, L and R, fast-forward, save states, `.sav` import/export and the cartridge
+clock from your device's time. There's no Nuzlocke tracking for GBA games yet; they just play.
+
 **Bring your own ROM.** Nothing copyrighted ships with the app. Species names, sprites, moves and encounter tables
 are decoded at runtime from the ROM you load, which stays in your browser (IndexedDB) and is never uploaded.
 
@@ -41,6 +45,8 @@ are decoded at runtime from the ROM you load, which stays in your browser (Index
 | --- | --- |
 | `wasm-core/` | The emulator, in Rust: SM83 CPU (M-cycle accurate), PPU, APU, timer, MBC1/2/3/5. Compiled to WebAssembly; no dependencies. |
 | `src/core/` | The built `lockstep_core.wasm`, its TypeScript wrapper (`gameboy.ts`) and loader, and the cartridge header parser. |
+| `wasm-gba/` | The Game Boy Advance core, in Rust: ARM7TDMI, PPU, sound, DMA/timers, Flash/SRAM saves, RTC, HLE BIOS. See its README. |
+| `src/gba/` | The built `lockstep_gba.wasm`, its wrapper, loader, play session and audio resampler. |
 | `src/gen1/` | Gen 1 knowledge: RAM reader and event differ, ROM data reader, pic decompressor, map names. |
 | `src/run/` | Nuzlocke rules engine. Pure functions from game events to run state, unit-tested. |
 | `src/bot/` | Auto-grind: reads which screen the game is on from its call stack, picks battle moves, drives the buttons. |
@@ -58,6 +64,7 @@ pnpm dev          # http://localhost:5173 (also on your LAN for phone testing)
 pnpm test         # unit tests
 pnpm build        # typecheck + production build
 pnpm wasm         # rebuild src/core/lockstep_core.wasm from wasm-core/ (needs Rust)
+node tools/build-wasm-gba.ts   # rebuild src/gba/lockstep_gba.wasm from wasm-gba/
 ```
 
 The built `.wasm` is committed, so `pnpm dev`, `pnpm build` and deploys don't need Rust. To change the emulator,

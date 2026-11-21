@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { parseHeader } from '../core/header.ts';
+import { GBA_MAX_ROM, isGbaRom, parseGbaHeader } from '../gba/header.ts';
 import { detectVersion } from '../gen1/rom.ts';
 import { db, requestPersistence, romKeyFor, type RomRecord } from '../platform/storage.ts';
 
@@ -34,8 +35,46 @@ export function Library({ onOpen, opening, error }: { onOpen: (r: RomRecord) => 
     if (error) setMsg(null);
   }, [error]);
 
+  const save = async (rec: RomRecord) => {
+    const existing = await db.getRom(rec.key);
+    await db.putRom({ ...rec, addedAt: existing?.addedAt ?? rec.addedAt });
+    void requestPersistence();
+    await refresh();
+  };
+
+  const addGba = async (file: File) => {
+    if (file.size > GBA_MAX_ROM) {
+      setMsg('That file is too big to be a Game Boy Advance ROM.');
+      return;
+    }
+    const data = new Uint8Array(await file.arrayBuffer());
+    if (!isGbaRom(data)) {
+      setMsg("That file doesn't look like a Game Boy Advance ROM.");
+      return;
+    }
+    const rec: RomRecord = {
+      key: await romKeyFor(data),
+      name: file.name.replace(/\.(gba|agb|bin)$/i, ''),
+      title: parseGbaHeader(data).title,
+      version: null,
+      system: 'gba',
+      size: data.length,
+      addedAt: Date.now(),
+      lastPlayedAt: Date.now(),
+      data,
+    };
+    await save(rec);
+    setMsg('Added. Nuzlocke tracking covers Red, Blue and Yellow for now, but this game will play.');
+    onOpen(rec);
+  };
+
   const addFile = async (file: File) => {
     setMsg(null);
+    // By extension, or by header for files named otherwise (e.g. .bin).
+    if (/\.(gba|agb)$/i.test(file.name) || isGbaRom(new Uint8Array(await file.slice(0, 0xc0).arrayBuffer()))) {
+      await addGba(file);
+      return;
+    }
     if (file.size > 8 * 1024 * 1024) {
       setMsg('That file is too big to be a Game Boy ROM.');
       return;
@@ -53,21 +92,17 @@ export function Library({ onOpen, opening, error }: { onOpen: (r: RomRecord) => 
       return;
     }
     const version = detectVersion(data);
-    const key = await romKeyFor(data);
-    const existing = await db.getRom(key);
     const rec: RomRecord = {
-      key,
+      key: await romKeyFor(data),
       name: file.name.replace(/\.(gbc?|zip)$/i, ''),
       title: header.title,
       version,
       size: data.length,
-      addedAt: existing?.addedAt ?? Date.now(),
+      addedAt: Date.now(),
       lastPlayedAt: Date.now(),
       data,
     };
-    await db.putRom(rec);
-    void requestPersistence();
-    await refresh();
+    await save(rec);
     if (!version) setMsg('Added. Nuzlocke tracking needs an English Pokémon Red, Blue or Yellow ROM, but this game will still play.');
     onOpen(rec);
   };
@@ -106,7 +141,7 @@ export function Library({ onOpen, opening, error }: { onOpen: (r: RomRecord) => 
         }}
       >
         <strong>{opening ? 'Opening…' : 'Load a ROM'}</strong>
-        <small>Pick a .gb file you dumped from your own cartridge. It stays on this device and is never uploaded.</small>
+        <small>Pick a .gb or .gba file you dumped from your own cartridge. It stays on this device and is never uploaded.</small>
         <input ref={input} type="file" className="sr-only" onChange={onPick} />
       </label>
       {(msg || error) && <div className="error">{msg ?? error}</div>}
@@ -118,7 +153,7 @@ export function Library({ onOpen, opening, error }: { onOpen: (r: RomRecord) => 
               <div>
                 <h3>{r.name}</h3>
                 <p>
-                  {r.version ? VERSION_LABEL[r.version] : r.title || 'Game Boy game'}, played {relTime(r.lastPlayedAt)}
+                  {r.version ? VERSION_LABEL[r.version] : r.system === 'gba' ? 'Game Boy Advance' : r.title || 'Game Boy game'}, played {relTime(r.lastPlayedAt)}
                 </p>
               </div>
               <div className="actions">

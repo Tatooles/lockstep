@@ -16,5 +16,8 @@ export const Button = {
   Select: 6,
   Start: 7,
 } as const;
+/** GBA shoulder buttons, numbered after the Game Boy's eight. */
+export const Shoulder = { L: 8, R: 9 } as const;
+
 export type ButtonId = (typeof Button)[keyof typeof Button];
 export type ButtonName = keyof typeof Button;
