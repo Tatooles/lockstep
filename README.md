@@ -28,7 +28,9 @@ knock your lead out, critical hits included. It's real EXP, real stat EXP and re
 
 It stops and hands control back for the parts worth playing: the area's first encounter (or, with no run going, a
 species you haven't caught), trainers, a move to learn, an evolution and a faint. Faints count. Pressing any button
-takes over. The bot reads the game's call stack to know which menu is up, so it never presses blindly.
+takes over. The bot reads the game's call stack (Gen 1) or its callbacks, tasks and battle controller (Gen 3) to know
+which menu is up, so it never presses blindly. On Gen 3 it picks moves with the Gen 3 damage formula, so abilities,
+held items, stat changes, weather and move priority count when it decides whether a foe is too dangerous.
 
 Tracking works with English **Pokémon Red, Blue and Yellow**. Any other DMG game still plays.
 
@@ -38,7 +40,7 @@ FireRed and LeafGreen** (every revision) get the same Nuzlocke tracking as Gen 1
 gifts, trades, dupes, deaths and wipes, level caps from the gym leaders' and Elite Four's teams, rule checks (items in
 battle, Set battle style, save states), the team, log and graves tabs, the wild encounter tables, and the battle tab.
 Its damage ranges use the Gen 3 formula with abilities, held items, stat stages, badges, weather, Reflect and Light
-Screen. Auto-grind and Endless Repel are Gen 1 only for now. Other GBA games just play.
+Screen. Auto-grind and Endless Repel work there too. Other GBA games just play.
 
 **Bring your own ROM.** Nothing copyrighted ships with the app. Species names, sprites, moves and encounter tables
 are decoded at runtime from the ROM you load, which stays in your browser (IndexedDB) and is never uploaded.
@@ -54,7 +56,7 @@ are decoded at runtime from the ROM you load, which stays in your browser (Index
 | `src/gen1/` | Gen 1 knowledge: RAM reader and event differ, ROM data reader, pic decompressor, map names. |
 | `src/gen3/` | Gen 3 knowledge: RAM reader (decrypts party and PC Pokémon, reads the battle state), ROM data reader (species, moves, trainers, map names, wild encounters, sprites), damage calculator. |
 | `src/run/` | Nuzlocke rules engine (pure functions from game events to run state, unit-tested), the snapshot differ, the `Dex` interface each generation implements, and the tracker both sessions share. |
-| `src/bot/` | Auto-grind: reads which screen the game is on from its call stack, picks battle moves, drives the buttons. |
+| `src/bot/` | Auto-grind: reads which screen the game is on (Gen 1's call stack; Gen 3's callbacks, tasks and battle controller), picks battle moves, drives the buttons. |
 | `src/platform/` | Frame loop, audio worklet output, IndexedDB storage. |
 | `src/ui/` | React UI. |
 
@@ -88,6 +90,8 @@ node tools/e2e.ts [rom]                # phone-viewport browser smoke test
 node tools/play.ts <rom> -e "..."      # scripted headless play to test tracking and auto-grind (commands in its header)
 node tools/gen3-track.ts <rom> "..."   # the same for Gen 3: scripted input with the tracker printing events
 node tools/gen3-damage-check.ts <rom> <state> <slot> <tries> "..."   # Gen 3 damage ranges against real hits, from a battle-menu state
+node tools/gen3-grind.ts <rom> <state> [--target N] [--trace]       # Gen 3 auto-grind from a save state, headless
+node tools/gba-pacing.ts <rom> [--every N] [--cpu X]                 # GBA frames per animation frame at a throttled refresh rate
 ```
 
 Current results: blargg `cpu_instrs`, `instr_timing`, `mem_timing`, `mem_timing-2`, `halt_bug` and dmg-acid2 pass;

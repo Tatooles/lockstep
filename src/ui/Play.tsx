@@ -181,7 +181,7 @@ export function Play({ session, onExit }: { session: PlaySession; onExit: () => 
           session={session}
           speed={view.speed}
           onMenu={() => openSheet()}
-          onGrind={session.system === 'gb' && data ? () => setGrindSetup(true) : undefined}
+          onGrind={data ? () => setGrindSetup(true) : undefined}
           shoulders={gba}
           menuLabel={gba && !data ? 'Menu' : undefined}
         />
@@ -216,7 +216,7 @@ export function Play({ session, onExit }: { session: PlaySession; onExit: () => 
       )}
 
       {newRun && data && <NewRunModal session={session} onClose={() => setNewRun(false)} />}
-      {grindSetup && session.system === 'gb' && <GrindModal session={session} onClose={() => setGrindSetup(false)} />}
+      {grindSetup && <GrindModal session={session} onClose={() => setGrindSetup(false)} />}
     </div>
   );
 }
